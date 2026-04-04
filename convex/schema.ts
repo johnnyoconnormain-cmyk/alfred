@@ -63,6 +63,13 @@ export default defineSchema({
   }).index('by_type', ['type'])
     .index('by_status', ['status']),
 
+  // Chat messages between user and Alfred
+  chatMessages: defineTable({
+    role: v.string(), // 'user' | 'assistant'
+    content: v.string(),
+    timestamp: v.number(),
+  }).index('by_timestamp', ['timestamp']),
+
   // Alfred's self-awareness / stats
   alfredState: defineTable({
     key: v.string(),

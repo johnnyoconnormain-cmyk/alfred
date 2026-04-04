@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { useQuery, useMutation } from 'convex/react'
+import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '../convex/_generated/api'
 
 // ─── Icons ───
@@ -389,8 +389,130 @@ function LiveTerminal({ activities, agents }) {
 }
 
 // ─── Main Nav ───
+// ─── Chat Panel ───
+function ChatPanel({ messages, onSend, onClear }) {
+  const [input, setInput] = useState('')
+  const [sending, setSending] = useState(false)
+  const scrollRef = useRef(null)
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [messages])
+
+  async function handleSend(e) {
+    e.preventDefault()
+    if (!input.trim() || sending) return
+    const msg = input.trim()
+    setInput('')
+    setSending(true)
+    try {
+      await onSend(msg)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4 fade-in">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-bold text-white">Talk to Alfred</h2>
+          <span className="text-xs text-[#6b6b80]">Your autonomous agent</span>
+        </div>
+        <button onClick={onClear} className="text-xs text-[#6b6b80] hover:text-white transition-colors px-3 py-1 bg-[#1a1a28] rounded-lg">
+          Clear Chat
+        </button>
+      </div>
+
+      {/* Chat Window */}
+      <div className="bg-[#08080e] border border-[#1e1e2e] rounded-xl overflow-hidden flex flex-col" style={{ height: '520px' }}>
+        {/* Messages */}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* Welcome message */}
+          {(!messages || messages.length === 0) && (
+            <div className="flex gap-3">
+              <div className="w-8 h-8 rounded-full bg-[#D4A843]/20 flex items-center justify-center shrink-0 mt-1">
+                <span className="text-sm">🤖</span>
+              </div>
+              <div className="bg-[#12121a] border border-[#1e1e2e] rounded-2xl rounded-tl-sm px-4 py-3 max-w-[80%]">
+                <p className="text-sm text-[#e2e2e8]">Good evening, boss. Alfred here, ready to work. What would you like me to do?</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button onClick={() => { setInput('Find me some web dev gigs'); }} className="text-xs bg-[#D4A843]/15 text-[#D4A843] px-3 py-1.5 rounded-lg hover:bg-[#D4A843]/25 transition-colors">
+                    Find me gigs
+                  </button>
+                  <button onClick={() => { setInput('What is your status?'); }} className="text-xs bg-[#D4A843]/15 text-[#D4A843] px-3 py-1.5 rounded-lg hover:bg-[#D4A843]/25 transition-colors">
+                    Status report
+                  </button>
+                  <button onClick={() => { setInput('How much money have we made?'); }} className="text-xs bg-[#D4A843]/15 text-[#D4A843] px-3 py-1.5 rounded-lg hover:bg-[#D4A843]/25 transition-colors">
+                    Revenue check
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {messages && messages.map((msg) => (
+            <div key={msg._id} className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-1 ${msg.role === 'user' ? 'bg-blue-500/20' : 'bg-[#D4A843]/20'}`}>
+                <span className="text-sm">{msg.role === 'user' ? '👤' : '🤖'}</span>
+              </div>
+              <div className={`rounded-2xl px-4 py-3 max-w-[80%] ${
+                msg.role === 'user'
+                  ? 'bg-blue-500/20 border border-blue-500/20 rounded-tr-sm'
+                  : 'bg-[#12121a] border border-[#1e1e2e] rounded-tl-sm'
+              }`}>
+                <p className="text-sm text-[#e2e2e8] whitespace-pre-wrap">{msg.content}</p>
+                <span className="text-[10px] text-[#4a4a5a] mt-1 block">
+                  {new Date(msg.timestamp).toLocaleTimeString()}
+                </span>
+              </div>
+            </div>
+          ))}
+
+          {sending && (
+            <div className="flex gap-3">
+              <div className="w-8 h-8 rounded-full bg-[#D4A843]/20 flex items-center justify-center shrink-0 mt-1">
+                <span className="text-sm">🤖</span>
+              </div>
+              <div className="bg-[#12121a] border border-[#1e1e2e] rounded-2xl rounded-tl-sm px-4 py-3">
+                <div className="flex gap-1">
+                  <div className="w-2 h-2 bg-[#D4A843] rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <div className="w-2 h-2 bg-[#D4A843] rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <div className="w-2 h-2 bg-[#D4A843] rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Input */}
+        <form onSubmit={handleSend} className="border-t border-[#1e1e2e] p-3 flex gap-2">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Talk to Alfred..."
+            className="flex-1 bg-[#12121a] border border-[#1e1e2e] rounded-xl px-4 py-2.5 text-sm text-white placeholder-[#4a4a5a] outline-none focus:border-[#D4A843]/50 transition-colors"
+            disabled={sending}
+          />
+          <button
+            type="submit"
+            disabled={sending || !input.trim()}
+            className="bg-[#D4A843] text-black font-semibold px-5 py-2.5 rounded-xl text-sm hover:bg-[#c49a38] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Send
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 const NAV = [
   { key: 'dashboard', label: 'Dashboard', icon: 'brain' },
+  { key: 'chat', label: 'Chat', icon: 'send' },
   { key: 'live', label: 'Live View', icon: 'monitor' },
   { key: 'agents', label: 'Agents', icon: 'zap' },
   { key: 'gigs', label: 'Gigs', icon: 'target' },
@@ -410,12 +532,15 @@ function App() {
   const financials = useQuery(api.transactions.getFinancials)
   const transactions = useQuery(api.transactions.list, { limit: 20 })
   const recentActivity = useQuery(api.activity.getRecent, { count: 30 })
+  const chatMessages = useQuery(api.chat.list)
 
   // Mutations
   const toggleAgent = useMutation(api.agents.updateStatus)
   const updateGigStatus = useMutation(api.gigs.updateStatus)
   const seedAgents = useMutation(api.seed.seedAgents)
   const logActivity = useMutation(api.activity.log)
+  const sendChatMessage = useAction(api.chat.sendMessage)
+  const clearChat = useMutation(api.chat.clearChat)
 
   function handleToggleAgent(agent) {
     const newStatus = agent.status === 'running' ? 'idle' : 'running'
@@ -511,6 +636,14 @@ function App() {
           </div>
         </div>
       </div>
+    ),
+
+    chat: (
+      <ChatPanel
+        messages={chatMessages}
+        onSend={(msg) => sendChatMessage({ message: msg })}
+        onClear={() => clearChat()}
+      />
     ),
 
     live: (
