@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../convex/_generated/api'
 
@@ -23,6 +23,9 @@ function Icon({ name, size = 18 }) {
     search: <><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></>,
     briefcase: <><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></>,
     pen: <><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></>,
+    monitor: <><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></>,
+    eye: <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>,
+    terminal: <><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></>,
   }
   return <svg {...s}>{icons[name]}</svg>
 }
@@ -251,9 +254,144 @@ function FinancialsPanel({ financials, transactions }) {
   )
 }
 
+// ─── Live Terminal ───
+function LiveTerminal({ activities, agents }) {
+  const scrollRef = useRef(null)
+  const runningAgents = (agents || []).filter((a) => a.status === 'running')
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [activities])
+
+  const statusIcon = (status) => {
+    if (status === 'success') return '✓'
+    if (status === 'error') return '✗'
+    return '→'
+  }
+  const statusColor = (status) => {
+    if (status === 'success') return 'text-green-400'
+    if (status === 'error') return 'text-red-400'
+    return 'text-blue-400'
+  }
+
+  return (
+    <div className="space-y-4 fade-in">
+      {/* Status Bar */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-bold text-white">Live View</h2>
+          <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium ${runningAgents.length > 0 ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'}`}>
+            <div className={`w-2 h-2 rounded-full ${runningAgents.length > 0 ? 'bg-green-500 animate-pulse' : 'bg-gray-500'}`} />
+            {runningAgents.length > 0 ? `${runningAgents.length} agent${runningAgents.length > 1 ? 's' : ''} active` : 'No agents running'}
+          </div>
+        </div>
+        <span className="text-xs text-[#6b6b80] font-mono">{new Date().toLocaleTimeString()}</span>
+      </div>
+
+      {/* Active Agents Strip */}
+      {runningAgents.length > 0 && (
+        <div className="flex gap-2 flex-wrap">
+          {runningAgents.map((a) => (
+            <div key={a._id} className="flex items-center gap-2 px-3 py-2 bg-green-500/10 border border-green-500/20 rounded-lg">
+              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+              <span className="text-xs text-green-400 font-medium">{a.name}</span>
+              <span className="text-xs text-green-400/50">running</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Terminal */}
+      <div className="bg-[#08080e] border border-[#1e1e2e] rounded-xl overflow-hidden">
+        {/* Terminal Header */}
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-[#0c0c14] border-b border-[#1e1e2e]">
+          <div className="flex gap-1.5">
+            <div className="w-3 h-3 rounded-full bg-red-500/80" />
+            <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
+            <div className="w-3 h-3 rounded-full bg-green-500/80" />
+          </div>
+          <span className="text-xs text-[#6b6b80] font-mono ml-2">alfred — live feed</span>
+          <div className="ml-auto flex items-center gap-1">
+            <div className={`w-1.5 h-1.5 rounded-full ${runningAgents.length > 0 ? 'bg-green-500 animate-pulse' : 'bg-gray-600'}`} />
+            <span className="text-[10px] text-[#4a4a5a] font-mono">{runningAgents.length > 0 ? 'LIVE' : 'IDLE'}</span>
+          </div>
+        </div>
+
+        {/* Terminal Body */}
+        <div ref={scrollRef} className="p-4 h-[500px] overflow-y-auto font-mono text-xs leading-6">
+          {/* Boot message */}
+          <div className="text-[#D4A843] mb-2">
+            ╔══════════════════════════════════════════╗
+          </div>
+          <div className="text-[#D4A843]">
+            ║  ALFRED v1.0 — Autonomous Agent System   ║
+          </div>
+          <div className="text-[#D4A843] mb-2">
+            ╚══════════════════════════════════════════╝
+          </div>
+          <div className="text-[#6b6b80] mb-1">[system] Agents loaded: {(agents || []).length}</div>
+          <div className="text-[#6b6b80] mb-1">[system] Running: {runningAgents.length} | Idle: {(agents || []).length - runningAgents.length}</div>
+          <div className="text-[#6b6b80] mb-4">[system] Live feed active — watching all agent activity</div>
+
+          {/* Activity entries */}
+          {(!activities || activities.length === 0) ? (
+            <div className="text-[#4a4a5a]">
+              <div className="mb-1">Waiting for agent activity...</div>
+              <div className="mb-1">Start an agent from the Agents panel to see live output here.</div>
+              <div className="text-[#D4A843]/50 animate-pulse mt-4">█</div>
+            </div>
+          ) : (
+            <>
+              {[...activities].reverse().map((a, i) => {
+                const time = new Date(a.timestamp).toLocaleTimeString()
+                return (
+                  <div key={a._id || i} className="flex gap-2 mb-1 hover:bg-white/[0.02] -mx-1 px-1 rounded">
+                    <span className="text-[#4a4a5a] shrink-0">{time}</span>
+                    <span className={`shrink-0 ${statusColor(a.status)}`}>{statusIcon(a.status)}</span>
+                    <span className="text-[#D4A843] shrink-0">[{a.agentType}]</span>
+                    <span className="text-[#8888a0]">{a.action}</span>
+                    <span className="text-[#6b6b80] truncate">{a.details}</span>
+                  </div>
+                )
+              })}
+              <div className="text-[#D4A843]/50 animate-pulse mt-2">█</div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Quick Stats Footer */}
+      <div className="grid grid-cols-4 gap-3">
+        <div className="bg-[#08080e] border border-[#1e1e2e] rounded-lg p-3 text-center">
+          <div className="text-xs text-[#6b6b80] mb-1">Uptime</div>
+          <div className="text-sm font-mono text-white">Active</div>
+        </div>
+        <div className="bg-[#08080e] border border-[#1e1e2e] rounded-lg p-3 text-center">
+          <div className="text-xs text-[#6b6b80] mb-1">Actions Today</div>
+          <div className="text-sm font-mono text-white">{activities?.length || 0}</div>
+        </div>
+        <div className="bg-[#08080e] border border-[#1e1e2e] rounded-lg p-3 text-center">
+          <div className="text-xs text-[#6b6b80] mb-1">Errors</div>
+          <div className="text-sm font-mono text-red-400">{activities?.filter((a) => a.status === 'error').length || 0}</div>
+        </div>
+        <div className="bg-[#08080e] border border-[#1e1e2e] rounded-lg p-3 text-center">
+          <div className="text-xs text-[#6b6b80] mb-1">Success Rate</div>
+          <div className="text-sm font-mono text-green-400">
+            {activities?.length > 0 ? Math.round((activities.filter((a) => a.status === 'success').length / activities.length) * 100) : 0}%
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main Nav ───
 const NAV = [
   { key: 'dashboard', label: 'Dashboard', icon: 'brain' },
+  { key: 'live', label: 'Live View', icon: 'monitor' },
   { key: 'agents', label: 'Agents', icon: 'zap' },
   { key: 'gigs', label: 'Gigs', icon: 'target' },
   { key: 'financials', label: 'Financials', icon: 'dollar' },
@@ -373,6 +511,10 @@ function App() {
           </div>
         </div>
       </div>
+    ),
+
+    live: (
+      <LiveTerminal activities={recentActivity} agents={agents} />
     ),
 
     agents: (
