@@ -34,7 +34,7 @@ export const clearChat = mutation({
   },
 })
 
-// Send message to Alfred (calls Claude API via Convex action)
+// Send message to Alfred (calls Gemini API via Convex action)
 export const sendMessage = action({
   args: { message: v.string() },
   handler: async (ctx, { message }) => {
@@ -53,7 +53,7 @@ export const sendMessage = action({
     const systemPrompt = `You are Alfred, an autonomous AI agent built to make money for your owner Johnny. You are sharp, confident, and always focused on generating revenue.
 
 Your current status:
-- Agents: ${agents.map(a => `${a.name} (${a.status})`).join(', ')}
+- Agents: ${agents.map((a: any) => `${a.name} (${a.status})`).join(', ')}
 - Gigs: ${gigStats.total} found, ${gigStats.new} new, ${gigStats.inProgress} in progress, ${gigStats.completed} completed
 - Revenue: $${financials.totalIncome.toFixed(2)} income, $${financials.totalExpenses.toFixed(2)} expenses, $${financials.profit.toFixed(2)} profit
 
@@ -69,65 +69,62 @@ Your personality: You're like a loyal butler who's also a hustler. Professional 
 
 When Johnny asks you to do something, tell him what you'll do and confirm. If he asks about status, give him the numbers. If he wants to chat, be friendly but always steer back to making money.`
 
-    const apiMessages = recentMessages.map(m => ({
-      role: m.role,
-      content: m.content,
-    }))
+    // Build Gemini conversation format
+    const geminiContents = [
+      {
+        role: 'user',
+        parts: [{ text: systemPrompt + '\n\nNow respond to the conversation below. Remember you ARE Alfred.' }],
+      },
+      {
+        role: 'model',
+        parts: [{ text: 'Understood. I am Alfred, ready to serve and make money. What do you need, boss?' }],
+      },
+      ...recentMessages.map((m: any) => ({
+        role: m.role === 'user' ? 'user' : 'model',
+        parts: [{ text: m.content }],
+      })),
+    ]
 
-    // Call Claude API
-    const apiKey = process.env.ANTHROPIC_API_KEY
+    const apiKey = process.env.GEMINI_API_KEY
     if (!apiKey) {
       await ctx.runMutation(api.chat.saveMessage, {
         role: 'assistant',
-        content: "I'm not fully online yet, boss. I need my API key to think independently. Add ANTHROPIC_API_KEY to the Convex environment variables and I'll be ready to work. Go to console.anthropic.com to get one.",
+        content: "I'm not fully online yet, boss. I need my API key to think independently. Add GEMINI_API_KEY to the Convex environment variables. Get one free at aistudio.google.com.",
       })
       return
     }
 
     try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1024,
-          system: systemPrompt,
-          messages: apiMessages,
-        }),
-      })
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: geminiContents,
+            generationConfig: {
+              maxOutputTokens: 1024,
+              temperature: 0.8,
+            },
+          }),
+        }
+      )
 
       if (!response.ok) {
-        const error = await response.text()
+        const errorText = await response.text()
         await ctx.runMutation(api.chat.saveMessage, {
           role: 'assistant',
-          content: `Hit a snag, boss. API error: ${response.status}. Check the API key in Convex environment variables.`,
+          content: `Hit a snag, boss. API error: ${response.status}. ${errorText.slice(0, 200)}`,
         })
         return
       }
 
       const data = await response.json()
-      const reply = data.content[0]?.text || "Sorry boss, got a blank response. Let me try again."
+      const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "Sorry boss, got a blank response. Let me try again."
 
       await ctx.runMutation(api.chat.saveMessage, { role: 'assistant', content: reply })
 
-      // Log the API cost (~$0.003 per 1k tokens for sonnet)
-      const inputTokens = data.usage?.input_tokens || 0
-      const outputTokens = data.usage?.output_tokens || 0
-      const cost = (inputTokens * 0.003 + outputTokens * 0.015) / 1000
-      if (cost > 0) {
-        await ctx.runMutation(api.transactions.add, {
-          type: 'expense',
-          amount: Math.round(cost * 10000) / 10000,
-          description: `Chat: ${message.slice(0, 50)}...`,
-          category: 'api_cost',
-          source: 'chat',
-        })
-      }
-    } catch (err) {
+    } catch (err: any) {
       await ctx.runMutation(api.chat.saveMessage, {
         role: 'assistant',
         content: `Something went wrong on my end, boss. Error: ${err.message || 'Unknown error'}. I'll get it sorted.`,
