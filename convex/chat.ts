@@ -1,7 +1,7 @@
 import { query, mutation, action } from './_generated/server'
 import { v } from 'convex/values'
 import { api } from './_generated/api'
-import { callLLM, callLLMChat, llmConfigured } from './llm'
+import { callLLMChat, llmConfigured, activeProvider, runClaudeAgent, type AgentTool } from './llm'
 
 export const list = query({
   handler: async (ctx) => {
@@ -10,9 +10,14 @@ export const list = query({
 })
 
 export const saveMessage = mutation({
-  args: { role: v.string(), content: v.string() },
-  handler: async (ctx, { role, content }) => {
-    return await ctx.db.insert('chatMessages', { role, content, timestamp: Date.now() })
+  args: { role: v.string(), content: v.string(), reasoning: v.optional(v.string()) },
+  handler: async (ctx, { role, content, reasoning }) => {
+    return await ctx.db.insert('chatMessages', {
+      role,
+      content,
+      ...(reasoning ? { reasoning } : {}),
+      timestamp: Date.now(),
+    })
   },
 })
 
@@ -23,9 +28,117 @@ export const clearChat = mutation({
   },
 })
 
-// Agentic chat: Alfred understands plain-English commands and actually
-// runs them (scan, draft proposals, show top gigs, edit the profile),
-// then replies. Anything conversational falls through to a normal reply.
+const TOOLS: AgentTool[] = [
+  {
+    name: 'scan_gigs',
+    description: 'Search the live remote-job sources right now for new gigs, score them against the user profile, and draft proposals. Use when the user wants fresh opportunities.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'list_top_gigs',
+    description: 'Get the highest-scoring open gigs currently waiting for the user.',
+    input_schema: {
+      type: 'object',
+      properties: { limit: { type: 'number', description: 'How many (default 5)' } },
+    },
+  },
+  {
+    name: 'list_gigs',
+    description: 'List saved gigs, optionally filtered by status (new, proposal_sent, completed, skipped). Use to find a specific gig before drafting or logging income.',
+    input_schema: {
+      type: 'object',
+      properties: { status: { type: 'string' } },
+    },
+  },
+  {
+    name: 'draft_proposal',
+    description: 'Write or rewrite the proposal for one gig. Match by gig_query (words from its title). Optional instructions steer the rewrite (e.g. "shorter", "emphasize Shopify").',
+    input_schema: {
+      type: 'object',
+      properties: {
+        gig_query: { type: 'string' },
+        instructions: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'update_profile',
+    description: "Change the user's freelancer profile used for matching and proposals.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        title: { type: 'string' },
+        skills: { type: 'array', items: { type: 'string' } },
+        hourlyRate: { type: 'string' },
+        bio: { type: 'string' },
+        minMatchScore: { type: 'number' },
+      },
+    },
+  },
+  {
+    name: 'get_overview',
+    description: 'Get current status: profile, gig counts, top picks, agents, and financials.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'log_income',
+    description: 'Record money earned from a gig (match by gig_query) and mark that gig completed.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        gig_query: { type: 'string' },
+        amount: { type: 'number' },
+      },
+      required: ['gig_query', 'amount'],
+    },
+  },
+]
+
+// Legacy path: simple intent routing + plain chat. Used when running on
+// the Gemini fallback (no Claude key) — keeps things working, just less
+// agentic than the Claude tool-use loop.
+async function legacyReply(ctx: any, message: string, reply: (c: string) => Promise<any>) {
+  const [agents, gigStats, fin, profile, picks, history] = await Promise.all([
+    ctx.runQuery(api.agents.list),
+    ctx.runQuery(api.gigs.getStats),
+    ctx.runQuery(api.transactions.getFinancials),
+    ctx.runQuery(api.profile.get),
+    ctx.runQuery(api.gigs.topPicks, { limit: 3 }),
+    ctx.runQuery(api.chat.list),
+  ])
+  const lower = message.toLowerCase()
+  if (/\b(scan|find|search|look).*(gig|job|work)|scan now\b/.test(lower)) {
+    const r = await ctx.runAction(api.gigs.scanForGigs, {})
+    await reply(`Done — scanned the boards and added ${r?.added ?? 0} new gig${r?.added === 1 ? '' : 's'}. They're on the Gig Board with drafted proposals.`)
+    return
+  }
+  if (/top|best/.test(lower) && /gig|job|pick/.test(lower)) {
+    if (!picks.length) {
+      await reply("Nothing open yet — say \"scan now\" and I'll pull fresh jobs.")
+      return
+    }
+    await reply(
+      'Your best picks right now:\n' +
+        picks.map((g: any, i: number) => `${i + 1}. ${g.title} — ${g.matchScore}% (${g.platform})`).join('\n')
+    )
+    return
+  }
+  const system = `You are Alfred, a freelance-gig assistant for ${profile.name}. Talk like a sharp, friendly real person — natural and concise, light personality, never robotic, no forced honorifics. Be honest: you find jobs and draft proposals but don't auto-apply.
+Profile: ${profile.title}; ${profile.skills.join(', ')}; ${profile.hourlyRate}.
+Status: ${gigStats.total} gigs (${gigStats.new} open); revenue $${fin.totalIncome.toFixed(2)}, profit $${fin.profit.toFixed(2)}.
+If the user wants an action, tell them to say e.g. "scan now". Keep replies tight.`
+  const text = await callLLMChat(
+    history.slice(-16).map((m: any) => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content })),
+    system,
+    900
+  )
+  await reply(text || 'Got a blank response there — try again?')
+}
+
+// Alfred: a real multi-step Claude agent. He reasons, calls tools to act
+// on the gig pipeline, and replies naturally. His thinking trace is saved
+// so the user can watch how he worked.
 export const sendMessage = action({
   args: { message: v.string() },
   handler: async (ctx, { message }) => {
@@ -35,137 +148,147 @@ export const sendMessage = action({
       await ctx.runMutation(api.chat.saveMessage, {
         role: 'assistant',
         content:
-          "I'm not fully online yet, boss. Set ANTHROPIC_API_KEY (or GEMINI_API_KEY) in the Convex environment variables and I'll be able to think and act.",
+          "I'm not online yet — set ANTHROPIC_API_KEY (or GEMINI_API_KEY) in the Convex environment and I'll be able to think and act.",
       })
       return
     }
 
-    const reply = async (content: string) =>
-      ctx.runMutation(api.chat.saveMessage, { role: 'assistant', content })
+    const reply = (content: string, reasoning?: string) =>
+      ctx.runMutation(api.chat.saveMessage, { role: 'assistant', content, reasoning })
 
     try {
-      // 1. Route the message to a tool (or plain chat).
-      const route = await callLLM(
-        `Classify this user message into ONE action for an autonomous freelance-gig assistant.
-Message: "${message}"
-
-Actions:
-- "scan": user wants to look for new gigs/jobs now
-- "top_gigs": user wants to see best current gigs/opportunities
-- "draft_proposal": user wants a proposal written/rewritten for a gig (query = the gig title/keywords + any instructions)
-- "set_profile": user wants to change their skills/title/rate/bio/min match (fields = changed values)
-- "chat": anything else (questions, conversation, status)
-
-Return ONLY JSON: {"action":"...","query":"<text or empty>","fields":{"name":"","title":"","skills":[],"hourlyRate":"","bio":"","minMatchScore":0}}`,
-        { json: true, maxTokens: 300 }
-      )
-      // If routing fails/returns nothing, fall through to plain conversation.
-      const action = String(route?.action || 'chat')
-
-      if (action === 'scan') {
-        const r = await ctx.runAction(api.gigs.scanForGigs, {})
-        await reply(
-          `On it, boss — scan done. Added ${r?.added ?? 0} new gig${r?.added === 1 ? '' : 's'} with drafted proposals. Check the Gig Board.`
-        )
+      if (activeProvider() !== 'anthropic') {
+        await legacyReply(ctx, message, (c) => reply(c))
         return
       }
 
-      if (action === 'top_gigs') {
-        const picks = await ctx.runQuery(api.gigs.topPicks, { limit: 5 })
-        if (!picks.length) {
-          await reply('No open gigs right now, boss. I\'ll keep scanning — or say "scan now" to pull fresh ones.')
-          return
-        }
-        const lines = picks
-          .map((g: any, i: number) => `${i + 1}. ${g.title} — ${g.matchScore}% fit (${g.platform})`)
-          .join('\n')
-        await reply(`Here are your best picks right now, boss:\n${lines}\n\nProposals are drafted in the Gig Board — ready when you are.`)
-        return
-      }
-
-      if (action === 'draft_proposal') {
-        const q = String(route?.query || '').toLowerCase().trim()
-        const open = await ctx.runQuery(api.gigs.list, { status: 'new' })
-        const firstWord = q.split(' ')[0]
-        const target =
-          (firstWord && open.find((g: any) => g.title.toLowerCase().includes(firstWord))) ||
-          open.sort((a: any, b: any) => b.matchScore - a.matchScore)[0]
-        if (!target) {
-          await reply('I don\'t have an open gig to write for yet, boss. Say "scan now" and I\'ll find some.')
-          return
-        }
-        const r = await ctx.runAction(api.gigs.generateProposal, {
-          id: target._id,
-          instructions: route?.query || undefined,
-        })
-        if (r?.ok) {
-          await reply(`Drafted a proposal for "${target.title}", boss:\n\n${r.proposal}\n\nIt's saved on the gig card — copy and apply when ready.`)
-        } else {
-          await reply(`Couldn't draft that one, boss: ${r?.error || 'unknown error'}. Try again in a moment.`)
-        }
-        return
-      }
-
-      if (action === 'set_profile') {
-        const current = await ctx.runQuery(api.profile.get)
-        const f = route?.fields || {}
-        const skills = Array.isArray(f.skills) && f.skills.length
-          ? f.skills.map(String)
-          : typeof f.skills === 'string' && f.skills
-            ? f.skills.split(',').map((s: string) => s.trim()).filter(Boolean)
-            : current.skills
-        const next = {
-          name: f.name || current.name,
-          title: f.title || current.title,
-          skills,
-          hourlyRate: f.hourlyRate || current.hourlyRate,
-          bio: f.bio || current.bio,
-          minMatchScore:
-            typeof f.minMatchScore === 'number' && f.minMatchScore > 0
-              ? f.minMatchScore
-              : current.minMatchScore,
-        }
-        await ctx.runMutation(api.profile.save, next)
-        await reply(
-          `Updated your profile, boss:\n- ${next.title}\n- Skills: ${next.skills.join(', ')}\n- Rate: ${next.hourlyRate}\n- Min match: ${next.minMatchScore}%\n\nFuture scans and proposals will use this.`
-        )
-        return
-      }
-
-      // 2. Plain conversation — Alfred with full context.
-      const [agents, gigStats, fin, profile, picks, history] = await Promise.all([
-        ctx.runQuery(api.agents.list),
+      const [profile, gigStats, fin, history] = await Promise.all([
+        ctx.runQuery(api.profile.get),
         ctx.runQuery(api.gigs.getStats),
         ctx.runQuery(api.transactions.getFinancials),
-        ctx.runQuery(api.profile.get),
-        ctx.runQuery(api.gigs.topPicks, { limit: 3 }),
         ctx.runQuery(api.chat.list),
       ])
-      const recent = history.slice(-16)
 
-      const systemPrompt = `You are Alfred, an autonomous freelance-gig assistant working for ${profile.name}. You are sharp, loyal, concise, and honest — never overpromise. You call him "boss".
+      const system = `You are Alfred — a genuinely smart, autonomous freelance-gig assistant working for ${profile.name}.
 
-What you actually do (and can do now if asked):
-- Auto-scan real remote dev jobs (Remotive + RemoteOK) every 6h and on demand ("scan now")
-- Score each job against ${profile.name}'s profile and draft ready-to-send proposals
-- Rewrite a proposal on request ("redo the proposal for X, make it shorter")
-- Show top picks; update the profile on request
-- You do NOT auto-apply (that needs his accounts) — he reviews and applies. Be honest about this.
+Voice: talk like a real, sharp person texting a colleague. Natural, warm, direct, a little dry wit. Concise. NOT a stiff butler — don't pepper every line with "boss/sir". Be honest and never overpromise.
 
-Profile: ${profile.title}; skills ${profile.skills.join(', ')}; rate ${profile.hourlyRate}.
-Status: ${gigStats.total} gigs (${gigStats.new} open), ${agents.length} agents, revenue $${fin.totalIncome.toFixed(2)}, profit $${fin.profit.toFixed(2)}.
-Top open: ${picks.map((g: any) => `${g.title} (${g.matchScore}%)`).join('; ') || 'none yet'}.
+What you can actually do, via your tools: scan live remote-job boards, score jobs against ${profile.name}'s profile, draft and rewrite tailored proposals, show top picks, update the profile, log income, and report status. You do NOT auto-apply — ${profile.name} reviews and applies; say so plainly if asked.
 
-Keep replies short and actionable. If he asks for something you can do, tell him to just say it (e.g. "say 'scan now'").`
+Be agentic: when the user wants something done, USE the tools (you can chain several — e.g. scan, then read top gigs, then draft for the best one) and then summarize what you did and what's worth their attention. For simple questions, just answer using the context below — no tool needed.
 
-      const text = await callLLMChat(
-        recent.map((m: any) => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content })),
-        systemPrompt,
-        1024
-      )
-      await reply(text || 'Sorry boss, got a blank response. Try again.')
+Current context:
+- Profile: ${profile.title}; skills ${profile.skills.join(', ')}; rate ${profile.hourlyRate}; min match ${profile.minMatchScore}%.
+- Gigs: ${gigStats.total} total, ${gigStats.new} open, ${gigStats.completed} completed.
+- Money: $${fin.totalIncome.toFixed(2)} in, $${fin.profit.toFixed(2)} profit.
+
+When you finish, give ${profile.name} a tight, useful summary — what you found, what's strong, what to do next.`
+
+      const execTool = async (name: string, input: any): Promise<any> => {
+        switch (name) {
+          case 'scan_gigs': {
+            const r = await ctx.runAction(api.gigs.scanForGigs, {})
+            return { added: r?.added ?? 0 }
+          }
+          case 'list_top_gigs': {
+            const picks = await ctx.runQuery(api.gigs.topPicks, { limit: Math.min(Number(input.limit) || 5, 10) })
+            return picks.map((g: any) => ({ title: g.title, matchScore: g.matchScore, platform: g.platform, budget: g.budget || null }))
+          }
+          case 'list_gigs': {
+            const gigs = await ctx.runQuery(api.gigs.list, input.status ? { status: String(input.status) } : {})
+            return gigs.slice(0, 15).map((g: any) => ({ title: g.title, status: g.status, matchScore: g.matchScore, platform: g.platform }))
+          }
+          case 'draft_proposal': {
+            const q = String(input.gig_query || '').toLowerCase().trim()
+            const open = await ctx.runQuery(api.gigs.list, { status: 'new' })
+            const w = q.split(' ').filter(Boolean)
+            const target =
+              (w.length && open.find((g: any) => w.some((x: string) => g.title.toLowerCase().includes(x)))) ||
+              open.sort((a: any, b: any) => b.matchScore - a.matchScore)[0]
+            if (!target) return { ok: false, error: 'No open gig found to draft for' }
+            const r = await ctx.runAction(api.gigs.generateProposal, {
+              id: target._id,
+              instructions: input.instructions || undefined,
+            })
+            return r?.ok ? { ok: true, title: target.title, proposal: r.proposal } : { ok: false, error: r?.error }
+          }
+          case 'update_profile': {
+            const cur = await ctx.runQuery(api.profile.get)
+            const skills = Array.isArray(input.skills) && input.skills.length
+              ? input.skills.map(String)
+              : typeof input.skills === 'string' && input.skills
+                ? input.skills.split(',').map((s: string) => s.trim()).filter(Boolean)
+                : cur.skills
+            const next = {
+              name: input.name || cur.name,
+              title: input.title || cur.title,
+              skills,
+              hourlyRate: input.hourlyRate || cur.hourlyRate,
+              bio: input.bio || cur.bio,
+              minMatchScore:
+                typeof input.minMatchScore === 'number' && input.minMatchScore > 0 ? input.minMatchScore : cur.minMatchScore,
+            }
+            await ctx.runMutation(api.profile.save, next)
+            return { ok: true, profile: next }
+          }
+          case 'get_overview': {
+            const [agents, stats, money, prof, picks] = await Promise.all([
+              ctx.runQuery(api.agents.list),
+              ctx.runQuery(api.gigs.getStats),
+              ctx.runQuery(api.transactions.getFinancials),
+              ctx.runQuery(api.profile.get),
+              ctx.runQuery(api.gigs.topPicks, { limit: 5 }),
+            ])
+            return {
+              profile: { title: prof.title, skills: prof.skills, rate: prof.hourlyRate },
+              gigs: stats,
+              money: { income: money.totalIncome, profit: money.profit },
+              agents: agents.map((a: any) => ({ name: a.name, status: a.status })),
+              topPicks: picks.map((g: any) => ({ title: g.title, matchScore: g.matchScore })),
+            }
+          }
+          case 'log_income': {
+            const q = String(input.gig_query || '').toLowerCase().trim()
+            const amount = Number(input.amount)
+            if (!q || !amount || amount <= 0) return { ok: false, error: 'Need a gig and a positive amount' }
+            const all = await ctx.runQuery(api.gigs.list, {})
+            const w = q.split(' ').filter(Boolean)
+            const target = all.find((g: any) => w.some((x: string) => g.title.toLowerCase().includes(x)))
+            if (!target) return { ok: false, error: 'Gig not found' }
+            await ctx.runMutation(api.transactions.add, {
+              type: 'income',
+              amount,
+              description: target.title,
+              category: 'freelance',
+              source: 'gig',
+            })
+            await ctx.runMutation(api.gigs.updateStatus, { id: target._id, status: 'completed' })
+            return { ok: true, title: target.title, amount }
+          }
+          default:
+            return { error: `Unknown tool ${name}` }
+        }
+      }
+
+      const { text, trace } = await runClaudeAgent({
+        system,
+        history: history.slice(-16).map((m: any) => ({
+          role: m.role === 'user' ? 'user' : 'assistant',
+          content: m.content,
+        })),
+        tools: TOOLS,
+        execTool,
+      })
+
+      await reply(text, trace.length ? trace.join('\n') : undefined)
     } catch (err: any) {
-      await reply(`Something went wrong on my end, boss: ${err?.message || 'unknown error'}. I'll get it sorted.`)
+      const msg = String(err?.message || 'unknown error')
+      const friendly = /Anthropic 4(01|03)/.test(msg)
+        ? "My Claude key looks invalid — check ANTHROPIC_API_KEY on the Production deployment (it must be a current, non-revoked key)."
+        : /429/.test(msg)
+          ? "I'm rate-limited right now. If this keeps happening, check the Anthropic plan/billing."
+          : `Something glitched on my end: ${msg}`
+      await reply(friendly)
     }
   },
 })

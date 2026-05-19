@@ -67,6 +67,7 @@ export default defineSchema({
   chatMessages: defineTable({
     role: v.string(), // 'user' | 'assistant'
     content: v.string(),
+    reasoning: v.optional(v.string()), // Alfred's step-by-step thinking trace
     timestamp: v.number(),
   }).index('by_timestamp', ['timestamp']),
 
