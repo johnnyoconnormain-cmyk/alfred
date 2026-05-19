@@ -18,6 +18,21 @@ export function llmConfigured(): boolean {
   return activeProvider() !== null
 }
 
+// Safe, value-free description of the engine for the dashboard.
+export function engineInfo() {
+  const provider = activeProvider()
+  return {
+    provider,
+    reasoningModel:
+      provider === 'anthropic' ? REASONING_MODEL : provider === 'gemini' ? 'gemini-2.0-flash' : null,
+    bulkModel:
+      provider === 'anthropic' ? BULK_MODEL : provider === 'gemini' ? 'gemini-2.0-flash' : null,
+    hasAnthropic: !!process.env.ANTHROPIC_API_KEY,
+    hasGemini: !!process.env.GEMINI_API_KEY,
+    telegramAlerts: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
+  }
+}
+
 function extractJson(text: string): any {
   try {
     return JSON.parse(text)

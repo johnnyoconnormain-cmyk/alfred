@@ -646,6 +646,7 @@ function ProfileForm({ profile, onSave }) {
 
 const NAV = [
   { key: 'dashboard', label: 'Dashboard', icon: 'brain' },
+  { key: 'brain', label: 'Brain', icon: 'zap' },
   { key: 'chat', label: 'Chat', icon: 'send' },
   { key: 'live', label: 'Live View', icon: 'monitor' },
   { key: 'agents', label: 'Agents', icon: 'zap' },
@@ -668,6 +669,7 @@ function App() {
   const transactions = useQuery(api.transactions.list, { limit: 20 })
   const recentActivity = useQuery(api.activity.getRecent, { count: 30 })
   const chatMessages = useQuery(api.chat.list)
+  const brainStatus = useQuery(api.system.status)
 
   // Mutations
   const toggleAgent = useMutation(api.agents.updateStatus)
@@ -897,6 +899,97 @@ function App() {
       <div className="space-y-4 fade-in">
         <h2 className="text-lg font-bold text-white mb-2">Financials</h2>
         <FinancialsPanel financials={financials} transactions={transactions} />
+      </div>
+    ),
+
+    brain: (
+      <div className="space-y-4 fade-in">
+        <div>
+          <h2 className="text-lg font-bold text-white">Alfred's Brain</h2>
+          <p className="text-xs text-[#6b6b80] mt-0.5">Exactly what he runs on, how he works on his own, and live proof he's doing real work.</p>
+        </div>
+
+        <div className="bg-[#12121a] border border-[#1e1e2e] rounded-xl p-5">
+          <h3 className="text-sm font-bold text-white mb-3">Engine</h3>
+          <div className="grid sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+            <div className="flex justify-between"><span className="text-[#6b6b80]">Reasoning model</span><span className="text-white font-mono text-xs">{brainStatus?.engine?.reasoningModel || '—'}</span></div>
+            <div className="flex justify-between"><span className="text-[#6b6b80]">Bulk model</span><span className="text-white font-mono text-xs">{brainStatus?.engine?.bulkModel || '—'}</span></div>
+            <div className="flex justify-between"><span className="text-[#6b6b80]">Provider</span><span className="text-white">{brainStatus?.engine?.provider || 'not set'}</span></div>
+            <div className="flex justify-between"><span className="text-[#6b6b80]">Runs on</span><span className="text-white text-xs">{brainStatus?.runsOn || '—'}</span></div>
+          </div>
+          <div className="flex gap-2 mt-4 flex-wrap">
+            {[['Claude key', brainStatus?.engine?.hasAnthropic], ['Gemini fallback', brainStatus?.engine?.hasGemini], ['Telegram alerts', brainStatus?.engine?.telegramAlerts]].map(([t, ok]) => (
+              <span key={t} className={`text-xs px-2 py-1 rounded-full ${ok ? 'bg-green-500/15 text-green-400' : 'bg-[#1a1a28] text-[#6b6b80]'}`}>{ok ? '✓' : '○'} {t}</span>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-[#12121a] border border-[#1e1e2e] rounded-xl p-5">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-bold text-white">Autonomous loop</h3>
+            <button onClick={handleScan} disabled={scanning} className="text-xs bg-[#D4A843] text-black font-bold px-3 py-1.5 rounded-lg hover:bg-[#c49a38] transition-colors disabled:opacity-50">
+              {scanning ? 'Scanning…' : 'Scan now'}
+            </button>
+          </div>
+          <p className="text-xs text-[#6b6b80] mb-3">He hunts on his own every {brainStatus?.scanIntervalHours ?? 6}h on Convex's servers — even with this site closed.</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+            <div className="bg-[#0a0a12] rounded-lg p-3"><div className="text-lg font-bold text-white">{brainStatus?.finder?.runCount ?? 0}</div><div className="text-xs text-[#6b6b80]">total scans</div></div>
+            <div className="bg-[#0a0a12] rounded-lg p-3"><div className="text-lg font-bold text-green-400">{brainStatus?.finder?.successCount ?? 0}</div><div className="text-xs text-[#6b6b80]">successful</div></div>
+            <div className="bg-[#0a0a12] rounded-lg p-3"><div className="text-xs font-bold text-white mt-1">{brainStatus?.finder?.lastRun ? new Date(brainStatus.finder.lastRun).toLocaleString() : 'never'}</div><div className="text-xs text-[#6b6b80]">last scan</div></div>
+            <div className="bg-[#0a0a12] rounded-lg p-3"><div className="text-xs font-bold text-white mt-1">{brainStatus?.finder?.nextRun ? new Date(brainStatus.finder.nextRun).toLocaleString() : '—'}</div><div className="text-xs text-[#6b6b80]">next (≈)</div></div>
+          </div>
+        </div>
+
+        <div className="bg-[#12121a] border border-[#1e1e2e] rounded-xl p-5">
+          <h3 className="text-sm font-bold text-white mb-1">Real job sources</h3>
+          <p className="text-xs text-[#6b6b80] mb-3">He queries these live APIs every scan. The gigs he saves link straight to the real postings — click and see.</p>
+          <div className="flex gap-2 flex-wrap">
+            {(brainStatus?.sources || []).map((s) => (
+              <a key={s.name} href={s.url} target="_blank" rel="noopener noreferrer" className="text-xs bg-[#1a1a28] text-[#D4A843] px-3 py-1.5 rounded-lg hover:bg-[#D4A843]/15 transition-colors">{s.name} ↗</a>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-[#12121a] border border-[#1e1e2e] rounded-xl p-5">
+          <h3 className="text-sm font-bold text-white mb-3">Recent scans — proof he's actually working</h3>
+          {(() => {
+            const scans = (recentActivity || []).filter((a) => a.agentType === 'gig_finder').slice(0, 6)
+            return scans.length ? (
+              <div className="space-y-2">
+                {scans.map((a) => (
+                  <div key={a._id} className="flex items-start justify-between gap-3 text-xs">
+                    <div><span className="text-white">{a.action}</span> <span className="text-[#6b6b80]">— {a.details}</span></div>
+                    <span className="text-[#4a4a5a] shrink-0">{new Date(a.timestamp).toLocaleString()}</span>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="text-xs text-[#6b6b80]">No scans logged yet. Hit “Scan now” above and watch this fill in.</p>
+          })()}
+        </div>
+
+        <div className="bg-[#12121a] border border-[#1e1e2e] rounded-xl p-5">
+          <h3 className="text-sm font-bold text-white mb-3">Latest finds — click through to the real job</h3>
+          {(allGigs && allGigs.length) ? (
+            <div className="space-y-2">
+              {allGigs.slice(0, 6).map((g) => (
+                <div key={g._id} className="flex items-center justify-between gap-3 bg-[#0a0a12] rounded-lg px-3 py-2">
+                  <div className="min-w-0"><div className="text-sm text-white truncate">{g.title}</div><div className="text-xs text-[#6b6b80]">{g.platform}{g.budget ? ` · ${g.budget}` : ''}</div></div>
+                  {g.url && <a href={g.url} target="_blank" rel="noopener noreferrer" className="text-xs text-[#D4A843] hover:underline shrink-0">Open ↗</a>}
+                </div>
+              ))}
+            </div>
+          ) : <p className="text-xs text-[#6b6b80]">No gigs yet — run a scan.</p>}
+        </div>
+
+        <div className="bg-[#12121a] border border-[#1e1e2e] rounded-xl p-5">
+          <h3 className="text-sm font-bold text-white mb-2">His last reasoning</h3>
+          {(() => {
+            const last = (chatMessages || []).filter((m) => m.role !== 'user' && m.reasoning).slice(-1)[0]
+            return last ? (
+              <pre className="p-3 bg-[#0a0a12] border border-[#1e1e2e] rounded-lg text-[11px] text-[#8b8b9e] whitespace-pre-wrap font-mono max-h-64 overflow-auto">{last.reasoning}</pre>
+            ) : <p className="text-xs text-[#6b6b80]">Ask him something in Chat (like “scan and pitch the best gig”), then come back — his step-by-step thinking shows here.</p>
+          })()}
+        </div>
       </div>
     ),
 
