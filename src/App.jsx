@@ -102,7 +102,8 @@ function AgentCard({ agent, onToggle }) {
 }
 
 // ─── Gig Card ───
-function GigCard({ gig, onAction }) {
+function GigCard({ gig, onAction, onRegenerate }) {
+  const [regen, setRegen] = useState(false)
   const statusColors = {
     new: 'bg-blue-500/20 text-blue-400',
     proposal_sent: 'bg-yellow-500/20 text-yellow-400',
@@ -161,6 +162,13 @@ function GigCard({ gig, onAction }) {
             Copy proposal
           </button>
         )}
+        <button
+          onClick={async () => { setRegen(true); try { await onRegenerate(gig._id) } finally { setRegen(false) } }}
+          disabled={regen}
+          className="text-xs bg-[#1a1a28] text-[#9b9bb0] px-3 py-1.5 rounded-lg hover:text-white transition-colors disabled:opacity-50"
+        >
+          {regen ? 'Writing…' : 'Regenerate'}
+        </button>
         {gig.status === 'new' && (
           <>
             <button onClick={() => onAction(gig._id, 'proposal_sent')} className="text-xs bg-green-500/15 text-green-400 px-3 py-1.5 rounded-lg hover:bg-green-500/25 transition-colors">
@@ -459,14 +467,14 @@ function ChatPanel({ messages, onSend, onClear }) {
               <div className="bg-[#12121a] border border-[#1e1e2e] rounded-2xl rounded-tl-sm px-4 py-3 max-w-[80%]">
                 <p className="text-sm text-[#e2e2e8]">Good evening, boss. Alfred here, ready to work. What would you like me to do?</p>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  <button onClick={() => { setInput('Find me some web dev gigs'); }} className="text-xs bg-[#D4A843]/15 text-[#D4A843] px-3 py-1.5 rounded-lg hover:bg-[#D4A843]/25 transition-colors">
-                    Find me gigs
+                  <button onClick={() => { setInput('Scan for new gigs now'); }} className="text-xs bg-[#D4A843]/15 text-[#D4A843] px-3 py-1.5 rounded-lg hover:bg-[#D4A843]/25 transition-colors">
+                    Scan now
                   </button>
-                  <button onClick={() => { setInput('What is your status?'); }} className="text-xs bg-[#D4A843]/15 text-[#D4A843] px-3 py-1.5 rounded-lg hover:bg-[#D4A843]/25 transition-colors">
-                    Status report
+                  <button onClick={() => { setInput('Show me my top gigs'); }} className="text-xs bg-[#D4A843]/15 text-[#D4A843] px-3 py-1.5 rounded-lg hover:bg-[#D4A843]/25 transition-colors">
+                    Top gigs
                   </button>
-                  <button onClick={() => { setInput('How much money have we made?'); }} className="text-xs bg-[#D4A843]/15 text-[#D4A843] px-3 py-1.5 rounded-lg hover:bg-[#D4A843]/25 transition-colors">
-                    Revenue check
+                  <button onClick={() => { setInput('Draft a proposal for my best gig'); }} className="text-xs bg-[#D4A843]/15 text-[#D4A843] px-3 py-1.5 rounded-lg hover:bg-[#D4A843]/25 transition-colors">
+                    Draft proposal
                   </button>
                 </div>
               </div>
@@ -530,6 +538,86 @@ function ChatPanel({ messages, onSend, onClear }) {
   )
 }
 
+// ─── Profile Settings ───
+function ProfileSettings({ profile, onSave }) {
+  if (!profile) {
+    return <div className="bg-[#12121a] border border-[#1e1e2e] rounded-xl p-6 text-sm text-[#6b6b80]">Loading profile…</div>
+  }
+  return <ProfileForm profile={profile} onSave={onSave} />
+}
+
+function ProfileForm({ profile, onSave }) {
+  const [form, setForm] = useState(() => ({
+    name: profile.name || '',
+    title: profile.title || '',
+    skills: (profile.skills || []).join(', '),
+    hourlyRate: profile.hourlyRate || '',
+    bio: profile.bio || '',
+    minMatchScore: profile.minMatchScore ?? 45,
+  }))
+  const [saved, setSaved] = useState(false)
+
+  const set = (k, v) => { setForm((f) => ({ ...f, [k]: v })); setSaved(false) }
+
+  async function submit(e) {
+    e.preventDefault()
+    await onSave({
+      name: form.name.trim() || 'Johnny',
+      title: form.title.trim(),
+      skills: form.skills.split(',').map((s) => s.trim()).filter(Boolean),
+      hourlyRate: form.hourlyRate.trim(),
+      bio: form.bio.trim(),
+      minMatchScore: Math.max(0, Math.min(100, Number(form.minMatchScore) || 0)),
+    })
+    setSaved(true)
+  }
+
+  const field = 'w-full bg-[#0a0a12] border border-[#1e1e2e] rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#D4A843]/50'
+
+  return (
+    <form onSubmit={submit} className="bg-[#12121a] border border-[#1e1e2e] rounded-xl p-6 space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold text-white">Your Profile</h3>
+        <p className="text-xs text-[#6b6b80] mt-0.5">Alfred uses this to match gigs and write proposals as you.</p>
+      </div>
+      <div className="grid sm:grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs text-[#6b6b80]">Name</label>
+          <input className={field} value={form.name} onChange={(e) => set('name', e.target.value)} />
+        </div>
+        <div>
+          <label className="text-xs text-[#6b6b80]">Headline / title</label>
+          <input className={field} value={form.title} onChange={(e) => set('title', e.target.value)} />
+        </div>
+      </div>
+      <div>
+        <label className="text-xs text-[#6b6b80]">Skills (comma separated)</label>
+        <input className={field} value={form.skills} onChange={(e) => set('skills', e.target.value)} />
+      </div>
+      <div className="grid sm:grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs text-[#6b6b80]">Rate</label>
+          <input className={field} value={form.hourlyRate} onChange={(e) => set('hourlyRate', e.target.value)} />
+        </div>
+        <div>
+          <label className="text-xs text-[#6b6b80]">Min match score to keep ({form.minMatchScore}%)</label>
+          <input type="range" min="0" max="100" value={form.minMatchScore} onChange={(e) => set('minMatchScore', e.target.value)} className="w-full accent-[#D4A843]" />
+        </div>
+      </div>
+      <div>
+        <label className="text-xs text-[#6b6b80]">Short bio</label>
+        <textarea rows={3} className={field} value={form.bio} onChange={(e) => set('bio', e.target.value)} />
+      </div>
+      <div className="flex items-center gap-3">
+        <button type="submit" className="text-sm bg-[#D4A843] text-black font-bold px-4 py-2 rounded-lg hover:bg-[#c49a38] transition-colors">
+          Save profile
+        </button>
+        {saved && <span className="text-xs text-green-400">Saved ✓</span>}
+      </div>
+    </form>
+  )
+}
+
 const NAV = [
   { key: 'dashboard', label: 'Dashboard', icon: 'brain' },
   { key: 'chat', label: 'Chat', icon: 'send' },
@@ -563,6 +651,10 @@ function App() {
   const sendChatMessage = useAction(api.chat.sendMessage)
   const clearChat = useMutation(api.chat.clearChat)
   const scanGigs = useAction(api.gigs.scanForGigs)
+  const generateProposal = useAction(api.gigs.generateProposal)
+  const profile = useQuery(api.profile.get)
+  const saveProfile = useMutation(api.profile.save)
+  const topPicks = useQuery(api.gigs.topPicks, { limit: 5 }) || []
 
   function handleToggleAgent(agent) {
     const newStatus = agent.status === 'running' ? 'idle' : 'running'
@@ -587,6 +679,11 @@ function App() {
     } finally {
       setScanning(false)
     }
+  }
+
+  async function handleRegenerate(id) {
+    const instructions = window.prompt('Any instructions for the rewrite? (optional — e.g. "shorter, emphasize Shopify")') || undefined
+    await generateProposal({ id, instructions })
   }
 
   // Seed agents if none exist
@@ -636,6 +733,31 @@ function App() {
               </div>
             ))}
           </div>
+        </div>
+
+        {/* Top picks — what to look at first */}
+        <div className="bg-[#12121a] border border-[#1e1e2e] rounded-xl p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold text-white">Today's Top Picks</h3>
+            <button onClick={() => setSection('gigs')} className="text-xs text-[#D4A843] hover:underline">View all</button>
+          </div>
+          {topPicks.length === 0 ? (
+            <p className="text-xs text-[#6b6b80]">No open gigs yet. Alfred scans every 6 hours, or hit “Scan now” on the Gig Board.</p>
+          ) : (
+            <div className="space-y-2">
+              {topPicks.map((g) => (
+                <div key={g._id} className="flex items-center justify-between gap-3 bg-[#0a0a12] rounded-lg px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="text-sm text-white truncate">{g.title}</div>
+                    <div className="text-xs text-[#6b6b80]">{g.platform}{g.budget ? ` · ${g.budget}` : ''}</div>
+                  </div>
+                  <div className={`text-xs font-bold px-2 py-1 rounded shrink-0 ${g.matchScore >= 80 ? 'bg-green-500/20 text-green-400' : g.matchScore >= 50 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-red-500/20 text-red-400'}`}>
+                    {g.matchScore}%
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Two columns: Gig Pipeline + Activity */}
@@ -722,7 +844,7 @@ function App() {
         ) : (
           <div className="grid lg:grid-cols-2 gap-4">
             {allGigs.map((gig) => (
-              <GigCard key={gig._id} gig={gig} onAction={handleGigAction} />
+              <GigCard key={gig._id} gig={gig} onAction={handleGigAction} onRegenerate={handleRegenerate} />
             ))}
           </div>
         )}
@@ -748,41 +870,7 @@ function App() {
     settings: (
       <div className="space-y-4 fade-in">
         <h2 className="text-lg font-bold text-white mb-2">Settings</h2>
-        <div className="bg-[#12121a] border border-[#1e1e2e] rounded-xl p-6">
-          <h3 className="text-sm font-semibold text-white mb-4">Alfred Configuration</h3>
-          <div className="space-y-4 text-sm">
-            <div className="flex items-center justify-between py-3 border-b border-[#1e1e2e]">
-              <div>
-                <div className="text-white">Auto-approve proposals under $50</div>
-                <div className="text-xs text-[#6b6b80]">Alfred will auto-submit proposals for gigs under $50</div>
-              </div>
-              <div className="w-10 h-5 bg-[#1a1a28] rounded-full relative cursor-pointer">
-                <div className="w-4 h-4 bg-[#6b6b80] rounded-full absolute top-0.5 left-0.5" />
-              </div>
-            </div>
-            <div className="flex items-center justify-between py-3 border-b border-[#1e1e2e]">
-              <div>
-                <div className="text-white">Daily spending limit</div>
-                <div className="text-xs text-[#6b6b80]">Maximum API costs per day</div>
-              </div>
-              <span className="text-[#D4A843] font-mono">$5.00</span>
-            </div>
-            <div className="flex items-center justify-between py-3 border-b border-[#1e1e2e]">
-              <div>
-                <div className="text-white">Target platforms</div>
-                <div className="text-xs text-[#6b6b80]">Where Alfred looks for gigs</div>
-              </div>
-              <span className="text-[#6b6b80]">Fiverr, Upwork, Direct</span>
-            </div>
-            <div className="flex items-center justify-between py-3">
-              <div>
-                <div className="text-white">Skills profile</div>
-                <div className="text-xs text-[#6b6b80]">What Alfred advertises</div>
-              </div>
-              <span className="text-[#6b6b80]">React, Next.js, Tailwind, Vite</span>
-            </div>
-          </div>
-        </div>
+        <ProfileSettings profile={profile} onSave={saveProfile} />
       </div>
     ),
   }

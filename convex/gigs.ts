@@ -23,29 +23,19 @@ export const add = mutation({
     matchScore: v.number(),
   },
   handler: async (ctx, args) => {
-    return await ctx.db.insert('gigs', {
-      ...args,
-      status: 'new',
-      foundAt: Date.now(),
-    })
+    return await ctx.db.insert('gigs', { ...args, status: 'new', foundAt: Date.now() })
   },
 })
 
 export const updateStatus = mutation({
-  args: {
-    id: v.id('gigs'),
-    status: v.string(),
-  },
+  args: { id: v.id('gigs'), status: v.string() },
   handler: async (ctx, { id, status }) => {
     await ctx.db.patch(id, { status })
   },
 })
 
 export const saveProposal = mutation({
-  args: {
-    id: v.id('gigs'),
-    proposal: v.string(),
-  },
+  args: { id: v.id('gigs'), proposal: v.string() },
   handler: async (ctx, { id, proposal }) => {
     await ctx.db.patch(id, { proposalDraft: proposal, status: 'proposal_sent' })
   },
@@ -64,7 +54,20 @@ export const getStats = query({
   },
 })
 
-// Existing gig URLs, used to skip jobs we've already saved.
+// Highest-scoring open gigs — what the human should look at first.
+export const topPicks = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit }) => {
+    const open = await ctx.db.query('gigs').withIndex('by_status', (q) => q.eq('status', 'new')).collect()
+    return open.sort((a, b) => b.matchScore - a.matchScore).slice(0, limit ?? 5)
+  },
+})
+
+export const get = query({
+  args: { id: v.id('gigs') },
+  handler: async (ctx, { id }) => await ctx.db.get(id),
+})
+
 export const existingUrls = query({
   handler: async (ctx) => {
     const all = await ctx.db.query('gigs').collect()
@@ -72,7 +75,6 @@ export const existingUrls = query({
   },
 })
 
-// Insert one scanned gig with its AI-scored proposal draft.
 export const insertScanned = mutation({
   args: {
     platform: v.string(),
@@ -83,13 +85,17 @@ export const insertScanned = mutation({
     skills: v.array(v.string()),
     matchScore: v.number(),
     proposalDraft: v.optional(v.string()),
+    status: v.string(),
   },
   handler: async (ctx, args) => {
-    return await ctx.db.insert('gigs', {
-      ...args,
-      status: 'new',
-      foundAt: Date.now(),
-    })
+    return await ctx.db.insert('gigs', { ...args, foundAt: Date.now() })
+  },
+})
+
+export const patchProposal = mutation({
+  args: { id: v.id('gigs'), proposal: v.string() },
+  handler: async (ctx, { id, proposal }) => {
+    await ctx.db.patch(id, { proposalDraft: proposal })
   },
 })
 
@@ -101,21 +107,26 @@ function stripHtml(html: string): string {
     .trim()
 }
 
-// Ask Gemini to score the job and draft a ready-to-send proposal.
-// Returns null if no key or the call fails (the job is still saved).
-async function draftWithGemini(
-  apiKey: string,
-  job: { title: string; company: string; description: string }
-): Promise<{ matchScore: number; skills: string[]; proposal: string } | null> {
-  const prompt = `You are Alfred, a freelance web developer who builds with React, Next.js, Vite, Tailwind and Node. A remote job was found:
+type Profile = {
+  name: string
+  title: string
+  skills: string[]
+  hourlyRate: string
+  bio: string
+  minMatchScore: number
+}
 
-Title: ${job.title}
-Company: ${job.company}
-Description: ${job.description.slice(0, 1500)}
+type NormalizedJob = {
+  source: string
+  url: string
+  title: string
+  company: string
+  description: string
+  budget?: string
+  tags: string[]
+}
 
-Return ONLY JSON with this exact shape:
-{"matchScore": <0-100 how well this fits a React/full-stack web dev>, "skills": [<up to 5 relevant skill tags>], "proposal": "<a concise first-person proposal of 120-180 words, ready to paste into the application, confident and specific to this role>"}`
-
+async function callGemini(apiKey: string, prompt: string, maxTokens: number): Promise<any | null> {
   try {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
@@ -124,32 +135,107 @@ Return ONLY JSON with this exact shape:
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: {
-            maxOutputTokens: 600,
-            temperature: 0.7,
-            responseMimeType: 'application/json',
-          },
+          generationConfig: { maxOutputTokens: maxTokens, temperature: 0.7, responseMimeType: 'application/json' },
         }),
       }
     )
     if (!res.ok) return null
     const data = await res.json()
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text
-    if (!text) return null
-    const parsed = JSON.parse(text)
-    return {
-      matchScore: Math.max(0, Math.min(100, Number(parsed.matchScore) || 0)),
-      skills: Array.isArray(parsed.skills) ? parsed.skills.slice(0, 5).map(String) : [],
-      proposal: typeof parsed.proposal === 'string' ? parsed.proposal : '',
-    }
+    return text ? JSON.parse(text) : null
   } catch {
     return null
   }
 }
 
-// Autonomous engine: pull real remote dev jobs, draft proposals, save new ones.
-// Runs from convex/crons.ts on a schedule (server-side, no browser needed)
-// and can also be triggered manually from the dashboard.
+function profileBlock(p: Profile): string {
+  return `Freelancer profile:
+- Name: ${p.name}
+- Headline: ${p.title}
+- Skills: ${p.skills.join(', ')}
+- Rate: ${p.hourlyRate}
+- About: ${p.bio}`
+}
+
+async function scoreAndDraft(
+  apiKey: string,
+  p: Profile,
+  job: NormalizedJob
+): Promise<{ matchScore: number; skills: string[]; proposal: string } | null> {
+  const parsed = await callGemini(
+    apiKey,
+    `${profileBlock(p)}
+
+A remote job was found:
+Title: ${job.title}
+Company: ${job.company}
+Description: ${job.description.slice(0, 1500)}
+
+Return ONLY JSON:
+{"matchScore": <0-100 fit for THIS freelancer specifically>, "skills": [<up to 5 relevant tags>], "proposal": "<first-person proposal, 120-180 words, specific to this role, references the freelancer's real skills, ready to paste into the application, no placeholders>"}`,
+    700
+  )
+  if (!parsed) return null
+  return {
+    matchScore: Math.max(0, Math.min(100, Number(parsed.matchScore) || 0)),
+    skills: Array.isArray(parsed.skills) ? parsed.skills.slice(0, 5).map(String) : [],
+    proposal: typeof parsed.proposal === 'string' ? parsed.proposal : '',
+  }
+}
+
+async function fetchRemotive(): Promise<NormalizedJob[]> {
+  try {
+    const res = await fetch('https://remotive.com/api/remote-jobs?category=software-dev&limit=25', {
+      headers: { 'User-Agent': 'Alfred-Gig-Assistant' },
+    })
+    if (!res.ok) return []
+    const data = await res.json()
+    const jobs: any[] = Array.isArray(data.jobs) ? data.jobs : []
+    return jobs
+      .filter((j) => j.url)
+      .map((j) => ({
+        source: 'remotive',
+        url: String(j.url),
+        title: String(j.title || 'Untitled role'),
+        company: String(j.company_name || 'Unknown'),
+        description: stripHtml(String(j.description || '')).slice(0, 1400),
+        budget: j.salary ? String(j.salary) : undefined,
+        tags: Array.isArray(j.tags) ? j.tags.slice(0, 5).map(String) : [],
+      }))
+  } catch {
+    return []
+  }
+}
+
+async function fetchRemoteOk(): Promise<NormalizedJob[]> {
+  try {
+    const res = await fetch('https://remoteok.com/api?tags=dev', {
+      headers: { 'User-Agent': 'Alfred-Gig-Assistant (contact: dashboard)' },
+    })
+    if (!res.ok) return []
+    const data = await res.json()
+    const jobs: any[] = Array.isArray(data) ? data.filter((j) => j && j.id && j.position) : []
+    return jobs.slice(0, 25).map((j) => {
+      const sal =
+        j.salary_min && j.salary_max ? `$${j.salary_min}–$${j.salary_max}` : undefined
+      return {
+        source: 'remoteok',
+        url: String(j.url || `https://remoteok.com/remote-jobs/${j.id}`),
+        title: String(j.position || 'Untitled role'),
+        company: String(j.company || 'Unknown'),
+        description: stripHtml(String(j.description || '')).slice(0, 1400),
+        budget: sal,
+        tags: Array.isArray(j.tags) ? j.tags.slice(0, 5).map(String) : [],
+      }
+    })
+  } catch {
+    return []
+  }
+}
+
+// Autonomous engine: pull real remote jobs from multiple sources, score
+// each against the user's profile, draft a tailored proposal, and save.
+// Low-fit jobs are auto-skipped so the board stays high-signal.
 export const scanForGigs = action({
   args: {},
   handler: async (ctx) => {
@@ -157,58 +243,59 @@ export const scanForGigs = action({
     await ctx.runMutation(api.activity.log, {
       agentType: 'gig_finder',
       action: 'Scan started',
-      details: 'Fetching remote web-dev jobs from Remotive',
+      details: 'Pulling remote dev jobs from Remotive + RemoteOK',
       status: 'info',
     })
 
-    let foundCount = 0
+    let added = 0
+    let skipped = 0
     try {
-      const res = await fetch(
-        'https://remotive.com/api/remote-jobs?category=software-dev&limit=30',
-        { headers: { 'User-Agent': 'Alfred-Gig-Assistant' } }
-      )
-      if (!res.ok) throw new Error(`Remotive returned ${res.status}`)
-      const data = await res.json()
-      const jobs: any[] = Array.isArray(data.jobs) ? data.jobs : []
-
+      const profile = (await ctx.runQuery(api.profile.get)) as Profile
+      const [a, b] = await Promise.all([fetchRemotive(), fetchRemoteOk()])
       const seen = new Set<string>(await ctx.runQuery(api.gigs.existingUrls))
       const apiKey = process.env.GEMINI_API_KEY
 
+      const fresh: NormalizedJob[] = []
+      for (const j of [...a, ...b]) {
+        if (!seen.has(j.url)) {
+          seen.add(j.url)
+          fresh.push(j)
+        }
+      }
       // Cap AI drafting per run to stay within the free Gemini tier.
-      const fresh = jobs.filter((j) => j.url && !seen.has(j.url)).slice(0, 6)
+      const batch = fresh.slice(0, 8)
 
-      for (const j of fresh) {
-        const description = stripHtml(String(j.description || '')).slice(0, 1200)
-        const title = String(j.title || 'Untitled role')
-        const company = String(j.company_name || 'Unknown')
-
+      for (const j of batch) {
         let matchScore = 0
-        let skills: string[] = Array.isArray(j.tags) ? j.tags.slice(0, 5).map(String) : []
+        let skills = j.tags
         let proposalDraft: string | undefined
-
         if (apiKey) {
-          const drafted = await draftWithGemini(apiKey, { title, company, description })
-          if (drafted) {
-            matchScore = drafted.matchScore
-            if (drafted.skills.length) skills = drafted.skills
-            proposalDraft = drafted.proposal
+          const r = await scoreAndDraft(apiKey, profile, j)
+          if (r) {
+            matchScore = r.matchScore
+            if (r.skills.length) skills = r.skills
+            proposalDraft = r.proposal
           }
         } else {
           proposalDraft =
-            'Proposal drafting is offline — add GEMINI_API_KEY to the Convex environment (free key at aistudio.google.com) and the next scan will write a tailored proposal here.'
+            'Proposal drafting is offline — add GEMINI_API_KEY to the Convex environment (free key at aistudio.google.com) and the next scan writes a tailored proposal here.'
         }
 
+        const status = apiKey && matchScore < profile.minMatchScore ? 'skipped' : 'new'
+        if (status === 'skipped') skipped++
+        else added++
+
         await ctx.runMutation(api.gigs.insertScanned, {
-          platform: 'remotive',
-          title,
-          description: description.slice(0, 600),
-          budget: j.salary ? String(j.salary) : undefined,
-          url: String(j.url),
+          platform: j.source,
+          title: j.title,
+          description: j.description.slice(0, 600),
+          budget: j.budget,
+          url: j.url,
           skills,
           matchScore,
           proposalDraft,
+          status,
         })
-        foundCount++
       }
 
       await ctx.runMutation(api.agents.recordRun, { type: 'gig_finder', success: true })
@@ -216,8 +303,8 @@ export const scanForGigs = action({
         agentType: 'gig_finder',
         action: 'Scan complete',
         details:
-          foundCount > 0
-            ? `Added ${foundCount} new gig${foundCount === 1 ? '' : 's'}${apiKey ? ' with drafted proposals' : ' (proposals pending API key)'}`
+          added + skipped > 0
+            ? `${added} new gig${added === 1 ? '' : 's'} added, ${skipped} low-fit auto-skipped`
             : 'No new gigs since last scan',
         status: 'success',
       })
@@ -233,6 +320,43 @@ export const scanForGigs = action({
       await ctx.runMutation(api.agents.updateStatus, { type: 'gig_finder', status: 'idle' })
     }
 
-    return { found: foundCount }
+    return { added }
+  },
+})
+
+// On-demand: (re)write the proposal for one gig, optionally steered by
+// the user's instructions ("make it shorter", "emphasize Shopify", ...).
+export const generateProposal = action({
+  args: { id: v.id('gigs'), instructions: v.optional(v.string()) },
+  handler: async (ctx, { id, instructions }) => {
+    const apiKey = process.env.GEMINI_API_KEY
+    if (!apiKey) return { ok: false, error: 'GEMINI_API_KEY not set' }
+    const gig = await ctx.runQuery(api.gigs.get, { id })
+    if (!gig) return { ok: false, error: 'Gig not found' }
+    const profile = (await ctx.runQuery(api.profile.get)) as Profile
+
+    const parsed = await callGemini(
+      apiKey,
+      `${profileBlock(profile)}
+
+Write a proposal for this job:
+Title: ${gig.title}
+Company/Source: ${gig.platform}
+Description: ${(gig.description || '').slice(0, 1500)}
+${instructions ? `Extra instructions from the freelancer: ${instructions}` : ''}
+
+Return ONLY JSON: {"proposal": "<first-person, 120-180 words, specific, ready to paste, no placeholders>"}`,
+      700
+    )
+    const proposal = parsed && typeof parsed.proposal === 'string' ? parsed.proposal : null
+    if (!proposal) return { ok: false, error: 'Drafting failed, try again' }
+    await ctx.runMutation(api.gigs.patchProposal, { id, proposal })
+    await ctx.runMutation(api.activity.log, {
+      agentType: 'proposal_writer',
+      action: 'Proposal drafted',
+      details: `Rewrote proposal for "${gig.title}"`,
+      status: 'success',
+    })
+    return { ok: true, proposal }
   },
 })
