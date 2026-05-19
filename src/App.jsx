@@ -423,6 +423,26 @@ function LiveTerminal({ activities, agents }) {
 
 // ─── Main Nav ───
 // ─── Chat Panel ───
+// ─── Alfred's thinking trace ───
+function ThinkingBlock({ reasoning }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="mt-2">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="text-[11px] text-[#D4A843]/80 hover:text-[#D4A843] transition-colors"
+      >
+        {open ? '▾ Hide thinking' : '🧠 Show thinking'}
+      </button>
+      {open && (
+        <pre className="mt-1 p-3 bg-[#0a0a12] border border-[#1e1e2e] rounded-lg text-[11px] text-[#8b8b9e] whitespace-pre-wrap font-mono max-h-56 overflow-auto">
+          {reasoning}
+        </pre>
+      )}
+    </div>
+  )
+}
+
 function ChatPanel({ messages, onSend, onClear }) {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
@@ -497,6 +517,7 @@ function ChatPanel({ messages, onSend, onClear }) {
                   : 'bg-[#12121a] border border-[#1e1e2e] rounded-tl-sm'
               }`}>
                 <p className="text-sm text-[#e2e2e8] whitespace-pre-wrap">{msg.content}</p>
+                {msg.role !== 'user' && msg.reasoning && <ThinkingBlock reasoning={msg.reasoning} />}
                 <span className="text-[10px] text-[#4a4a5a] mt-1 block">
                   {new Date(msg.timestamp).toLocaleTimeString()}
                 </span>
