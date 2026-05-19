@@ -1,6 +1,7 @@
 import { query, mutation, action } from './_generated/server'
 import { v } from 'convex/values'
 import { api } from './_generated/api'
+import { callLLM, callLLMChat, llmConfigured } from './llm'
 
 export const list = query({
   handler: async (ctx) => {
@@ -22,29 +23,6 @@ export const clearChat = mutation({
   },
 })
 
-async function gemini(apiKey: string, prompt: string, json: boolean, maxTokens: number): Promise<any> {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: {
-          maxOutputTokens: maxTokens,
-          temperature: json ? 0.2 : 0.8,
-          ...(json ? { responseMimeType: 'application/json' } : {}),
-        },
-      }),
-    }
-  )
-  if (!res.ok) throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 150)}`)
-  const data = await res.json()
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text
-  if (!text) throw new Error('Empty response')
-  return json ? JSON.parse(text) : text
-}
-
 // Agentic chat: Alfred understands plain-English commands and actually
 // runs them (scan, draft proposals, show top gigs, edit the profile),
 // then replies. Anything conversational falls through to a normal reply.
@@ -53,12 +31,11 @@ export const sendMessage = action({
   handler: async (ctx, { message }) => {
     await ctx.runMutation(api.chat.saveMessage, { role: 'user', content: message })
 
-    const apiKey = process.env.GEMINI_API_KEY
-    if (!apiKey) {
+    if (!llmConfigured()) {
       await ctx.runMutation(api.chat.saveMessage, {
         role: 'assistant',
         content:
-          "I'm not fully online yet, boss. Add GEMINI_API_KEY to the Convex environment variables (free key at aistudio.google.com) and I'll be able to think and act.",
+          "I'm not fully online yet, boss. Set ANTHROPIC_API_KEY (or GEMINI_API_KEY) in the Convex environment variables and I'll be able to think and act.",
       })
       return
     }
@@ -68,11 +45,8 @@ export const sendMessage = action({
 
     try {
       // 1. Route the message to a tool (or plain chat).
-      let route: any = null
-      try {
-        route = await gemini(
-          apiKey,
-          `Classify this user message into ONE action for an autonomous freelance-gig assistant.
+      const route = await callLLM(
+        `Classify this user message into ONE action for an autonomous freelance-gig assistant.
 Message: "${message}"
 
 Actions:
@@ -83,13 +57,9 @@ Actions:
 - "chat": anything else (questions, conversation, status)
 
 Return ONLY JSON: {"action":"...","query":"<text or empty>","fields":{"name":"","title":"","skills":[],"hourlyRate":"","bio":"","minMatchScore":0}}`,
-          true,
-          300
-        )
-      } catch {
-        // Routing failed — treat as plain conversation rather than erroring.
-        route = { action: 'chat' }
-      }
+        { json: true, maxTokens: 300 }
+      )
+      // If routing fails/returns nothing, fall through to plain conversation.
       const action = String(route?.action || 'chat')
 
       if (action === 'scan') {
@@ -188,34 +158,12 @@ Top open: ${picks.map((g: any) => `${g.title} (${g.matchScore}%)`).join('; ') ||
 
 Keep replies short and actionable. If he asks for something you can do, tell him to just say it (e.g. "say 'scan now'").`
 
-      const convo = [
-        { role: 'user', parts: [{ text: systemPrompt + '\n\nRespond as Alfred to the conversation.' }] },
-        { role: 'model', parts: [{ text: 'Understood, boss. Ready.' }] },
-        ...recent.map((m: any) => ({
-          role: m.role === 'user' ? 'user' : 'model',
-          parts: [{ text: m.content }],
-        })),
-      ]
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: convo,
-            generationConfig: { maxOutputTokens: 1024, temperature: 0.8 },
-          }),
-        }
+      const text = await callLLMChat(
+        recent.map((m: any) => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content })),
+        systemPrompt,
+        1024
       )
-      if (!res.ok) {
-        await reply(`Hit a snag, boss. API error ${res.status}.`)
-        return
-      }
-      const data = await res.json()
-      const text =
-        data.candidates?.[0]?.content?.parts?.[0]?.text ||
-        'Sorry boss, got a blank response. Try again.'
-      await reply(text)
+      await reply(text || 'Sorry boss, got a blank response. Try again.')
     } catch (err: any) {
       await reply(`Something went wrong on my end, boss: ${err?.message || 'unknown error'}. I'll get it sorted.`)
     }

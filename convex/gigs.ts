@@ -1,6 +1,7 @@
 import { query, mutation, action } from './_generated/server'
 import { v } from 'convex/values'
 import { api } from './_generated/api'
+import { callLLM, llmConfigured, notifyTelegram } from './llm'
 
 export const list = query({
   args: { status: v.optional(v.string()) },
@@ -126,28 +127,6 @@ type NormalizedJob = {
   tags: string[]
 }
 
-async function callGemini(apiKey: string, prompt: string, maxTokens: number): Promise<any | null> {
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { maxOutputTokens: maxTokens, temperature: 0.7, responseMimeType: 'application/json' },
-        }),
-      }
-    )
-    if (!res.ok) return null
-    const data = await res.json()
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text
-    return text ? JSON.parse(text) : null
-  } catch {
-    return null
-  }
-}
-
 function profileBlock(p: Profile): string {
   return `Freelancer profile:
 - Name: ${p.name}
@@ -158,12 +137,10 @@ function profileBlock(p: Profile): string {
 }
 
 async function scoreAndDraft(
-  apiKey: string,
   p: Profile,
   job: NormalizedJob
 ): Promise<{ matchScore: number; skills: string[]; proposal: string } | null> {
-  const parsed = await callGemini(
-    apiKey,
+  const parsed = await callLLM(
     `${profileBlock(p)}
 
 A remote job was found:
@@ -173,7 +150,7 @@ Description: ${job.description.slice(0, 1500)}
 
 Return ONLY JSON:
 {"matchScore": <0-100 fit for THIS freelancer specifically>, "skills": [<up to 5 relevant tags>], "proposal": "<first-person proposal, 120-180 words, specific to this role, references the freelancer's real skills, ready to paste into the application, no placeholders>"}`,
-    700
+    { json: true, maxTokens: 800 }
   )
   if (!parsed) return null
   return {
@@ -253,7 +230,7 @@ export const scanForGigs = action({
       const profile = (await ctx.runQuery(api.profile.get)) as Profile
       const [a, b] = await Promise.all([fetchRemotive(), fetchRemoteOk()])
       const seen = new Set<string>(await ctx.runQuery(api.gigs.existingUrls))
-      const apiKey = process.env.GEMINI_API_KEY
+      const configured = llmConfigured()
 
       const fresh: NormalizedJob[] = []
       for (const j of [...a, ...b]) {
@@ -269,8 +246,8 @@ export const scanForGigs = action({
         let matchScore = 0
         let skills = j.tags
         let proposalDraft: string | undefined
-        if (apiKey) {
-          const r = await scoreAndDraft(apiKey, profile, j)
+        if (configured) {
+          const r = await scoreAndDraft(profile, j)
           if (r) {
             matchScore = r.matchScore
             if (r.skills.length) skills = r.skills
@@ -278,10 +255,10 @@ export const scanForGigs = action({
           }
         } else {
           proposalDraft =
-            'Proposal drafting is offline — add GEMINI_API_KEY to the Convex environment (free key at aistudio.google.com) and the next scan writes a tailored proposal here.'
+            'Proposal drafting is offline — set ANTHROPIC_API_KEY (or GEMINI_API_KEY) in the Convex environment and the next scan writes a tailored proposal here.'
         }
 
-        const status = apiKey && matchScore < profile.minMatchScore ? 'skipped' : 'new'
+        const status = configured && matchScore < profile.minMatchScore ? 'skipped' : 'new'
         if (status === 'skipped') skipped++
         else added++
 
@@ -296,6 +273,13 @@ export const scanForGigs = action({
           proposalDraft,
           status,
         })
+
+        // Alert on strong matches (no-op unless Telegram env is set).
+        if (status === 'new' && matchScore >= 80) {
+          await notifyTelegram(
+            `Alfred — strong gig (${matchScore}%): ${j.title} @ ${j.company}\n${j.url}`
+          )
+        }
       }
 
       await ctx.runMutation(api.agents.recordRun, { type: 'gig_finder', success: true })
@@ -329,14 +313,12 @@ export const scanForGigs = action({
 export const generateProposal = action({
   args: { id: v.id('gigs'), instructions: v.optional(v.string()) },
   handler: async (ctx, { id, instructions }) => {
-    const apiKey = process.env.GEMINI_API_KEY
-    if (!apiKey) return { ok: false, error: 'GEMINI_API_KEY not set' }
+    if (!llmConfigured()) return { ok: false, error: 'No LLM key set (ANTHROPIC_API_KEY or GEMINI_API_KEY)' }
     const gig = await ctx.runQuery(api.gigs.get, { id })
     if (!gig) return { ok: false, error: 'Gig not found' }
     const profile = (await ctx.runQuery(api.profile.get)) as Profile
 
-    const parsed = await callGemini(
-      apiKey,
+    const parsed = await callLLM(
       `${profileBlock(profile)}
 
 Write a proposal for this job:
@@ -346,7 +328,7 @@ Description: ${(gig.description || '').slice(0, 1500)}
 ${instructions ? `Extra instructions from the freelancer: ${instructions}` : ''}
 
 Return ONLY JSON: {"proposal": "<first-person, 120-180 words, specific, ready to paste, no placeholders>"}`,
-      700
+      { json: true, maxTokens: 800 }
     )
     const proposal = parsed && typeof parsed.proposal === 'string' ? parsed.proposal : null
     if (!proposal) return { ok: false, error: 'Drafting failed, try again' }

@@ -102,7 +102,7 @@ function AgentCard({ agent, onToggle }) {
 }
 
 // ─── Gig Card ───
-function GigCard({ gig, onAction, onRegenerate }) {
+function GigCard({ gig, onAction, onRegenerate, onLogIncome }) {
   const [regen, setRegen] = useState(false)
   const statusColors = {
     new: 'bg-blue-500/20 text-blue-400',
@@ -178,6 +178,11 @@ function GigCard({ gig, onAction, onRegenerate }) {
               Skip
             </button>
           </>
+        )}
+        {gig.status !== 'completed' && (
+          <button onClick={() => onLogIncome(gig)} className="text-xs bg-[#D4A843]/15 text-[#D4A843] px-3 py-1.5 rounded-lg hover:bg-[#D4A843]/25 transition-colors">
+            Log income
+          </button>
         )}
       </div>
     </div>
@@ -655,6 +660,7 @@ function App() {
   const profile = useQuery(api.profile.get)
   const saveProfile = useMutation(api.profile.save)
   const topPicks = useQuery(api.gigs.topPicks, { limit: 5 }) || []
+  const addTransaction = useMutation(api.transactions.add)
 
   function handleToggleAgent(agent) {
     const newStatus = agent.status === 'running' ? 'idle' : 'running'
@@ -684,6 +690,21 @@ function App() {
   async function handleRegenerate(id) {
     const instructions = window.prompt('Any instructions for the rewrite? (optional — e.g. "shorter, emphasize Shopify")') || undefined
     await generateProposal({ id, instructions })
+  }
+
+  async function handleLogIncome(gig) {
+    const raw = window.prompt(`Log income for "${gig.title}". Amount in USD:`)
+    if (raw == null) return
+    const amount = Number(String(raw).replace(/[^0-9.]/g, ''))
+    if (!amount || amount <= 0) return
+    await addTransaction({
+      type: 'income',
+      amount,
+      description: gig.title,
+      category: 'freelance',
+      source: 'gig',
+    })
+    await updateGigStatus({ id: gig._id, status: 'completed' })
   }
 
   // Seed agents if none exist
@@ -844,7 +865,7 @@ function App() {
         ) : (
           <div className="grid lg:grid-cols-2 gap-4">
             {allGigs.map((gig) => (
-              <GigCard key={gig._id} gig={gig} onAction={handleGigAction} onRegenerate={handleRegenerate} />
+              <GigCard key={gig._id} gig={gig} onAction={handleGigAction} onRegenerate={handleRegenerate} onLogIncome={handleLogIncome} />
             ))}
           </div>
         )}
