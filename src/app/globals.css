@@ -1,0 +1,224 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --font-sans: ui-sans-serif, system-ui, sans-serif;
+    --font-display: var(--font-sans);
+    color-scheme: light;
+  }
+
+  * {
+    border-color: theme('colors.line.DEFAULT');
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-paper text-ink antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'ss01';
+  }
+
+  /* Numbers in tables and axes align; large standalone figures stay proportional. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    background: #d6e4d9;
+  }
+
+  :focus-visible {
+    outline: 2px solid theme('colors.field.DEFAULT');
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* ------------------------------- surfaces ------------------------------- */
+  .card {
+    @apply rounded-lg border border-line bg-paper-raised shadow-card;
+  }
+
+  .card-pad {
+    @apply p-4 sm:p-5;
+  }
+
+  .card-head {
+    @apply flex items-baseline justify-between gap-3 border-b border-line px-4 py-3 sm:px-5;
+  }
+
+  .eyebrow {
+    @apply text-2xs font-semibold uppercase tracking-[0.1em] text-ink-faint;
+  }
+
+  .hairline {
+    @apply border-line;
+  }
+
+  /* -------------------------------- buttons ------------------------------- */
+  .btn {
+    @apply inline-flex select-none items-center justify-center gap-2 rounded border px-3 py-2
+           text-sm font-semibold transition-colors duration-100 disabled:cursor-not-allowed
+           disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply border-field-deep bg-field text-white hover:bg-field-deep;
+  }
+
+  .btn-secondary {
+    @apply border-line-strong bg-paper-raised text-ink hover:bg-paper-sunken;
+  }
+
+  .btn-ghost {
+    @apply border-transparent bg-transparent text-ink-muted hover:bg-paper-sunken hover:text-ink;
+  }
+
+  .btn-danger {
+    @apply border-status-critical/30 bg-paper-raised text-status-critical hover:bg-status-critical/10;
+  }
+
+  .btn-lg {
+    @apply px-5 py-3 text-base;
+  }
+
+  .btn-sm {
+    @apply px-2.5 py-1.5 text-xs;
+  }
+
+  /* --------------------------------- forms -------------------------------- */
+  .field-label {
+    @apply mb-1.5 block text-xs font-semibold uppercase tracking-[0.06em] text-ink-muted;
+  }
+
+  .input {
+    @apply w-full rounded border border-line-strong bg-paper-raised px-3 py-2 text-sm text-ink
+           placeholder:text-ink-faint focus:border-field focus:outline-none focus:ring-1
+           focus:ring-field;
+  }
+
+  .input-lg {
+    @apply px-3.5 py-3 text-base;
+  }
+
+  textarea.input {
+    @apply min-h-[96px] leading-relaxed;
+  }
+
+  select.input {
+    @apply appearance-none bg-[length:16px] bg-[right_0.6rem_center] bg-no-repeat pr-9;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%235f6259' stroke-width='1.6'%3E%3Cpath d='M4 6.5 8 10.5 12 6.5'/%3E%3C/svg%3E");
+  }
+
+  /* --------------------------------- badges ------------------------------- */
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-sm border px-1.5 py-0.5 text-2xs
+           font-semibold uppercase tracking-[0.06em];
+  }
+
+  .badge-neutral {
+    @apply border-line-strong bg-paper-sunken text-ink-muted;
+  }
+
+  .badge-good {
+    @apply border-status-good/25 bg-field-light text-status-good;
+  }
+
+  .badge-warning {
+    @apply border-status-warning/25 bg-[#fdf4e3] text-status-warning;
+  }
+
+  .badge-serious {
+    @apply border-status-serious/25 bg-[#fbeee6] text-status-serious;
+  }
+
+  .badge-critical {
+    @apply border-status-critical/25 bg-[#fbeceb] text-status-critical;
+  }
+
+  .badge-info {
+    @apply border-series-1/25 bg-[#eaf2fc] text-series-1;
+  }
+
+  /* --------------------------------- tables ------------------------------- */
+  .table-wrap {
+    @apply w-full overflow-x-auto;
+  }
+
+  .data-table {
+    @apply w-full min-w-[640px] border-collapse text-sm;
+  }
+
+  .data-table thead th {
+    @apply border-b border-line px-4 py-2.5 text-left text-2xs font-semibold uppercase
+           tracking-[0.08em] text-ink-faint;
+  }
+
+  .data-table tbody td {
+    @apply border-b border-line px-4 py-3 align-middle;
+  }
+
+  .data-table tbody tr:last-child td {
+    @apply border-b-0;
+  }
+
+  .row-link {
+    @apply cursor-pointer transition-colors hover:bg-paper-sunken/70;
+  }
+
+  /* ------------------------------- typography ----------------------------- */
+  .h-display {
+    @apply font-display text-2xl font-bold tracking-[-0.02em] text-ink sm:text-3xl;
+  }
+
+  .h-section {
+    @apply font-display text-sm font-bold uppercase tracking-[0.1em] text-ink;
+  }
+
+  .figure-hero {
+    @apply font-display text-4xl font-bold tracking-[-0.03em] text-ink sm:text-5xl;
+  }
+
+  .figure {
+    @apply font-display text-2xl font-bold tracking-[-0.02em] text-ink;
+  }
+
+  /* ------------------------------ mobile shell ---------------------------- */
+  .safe-bottom {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem);
+  }
+
+  .tap {
+    @apply min-h-[44px] min-w-[44px];
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  /* The 2px surface gap the chart marks use to separate touching fills. */
+  .mark-gap {
+    box-shadow: 0 0 0 2px theme('colors.paper.raised');
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
