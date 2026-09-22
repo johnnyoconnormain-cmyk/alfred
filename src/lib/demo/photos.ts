@@ -125,3 +125,8 @@ export function yardScene({ seed, phase }: SceneOptions): string {
   <rect width="${W}" height="${H}" fill="url(#vignette)"/>
 </svg>`;
 }
+
+/** Where the demo's generated imagery is served from. */
+export function demoPhotoUrl(seed: number, phase: 'before' | 'after'): string {
+  return `/api/demo-photo/${phase}-${seed}.svg`;
+}

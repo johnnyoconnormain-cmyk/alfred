@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { ensureReady } from '@/lib/db';
 import { getInvoiceByToken } from '@/lib/queries/invoices';
 import { paymentProvider } from '@/lib/payments';
 import { appUrl } from '@/lib/automations/engine';
@@ -16,6 +17,7 @@ export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ token: string }> },
 ): Promise<NextResponse> {
+  await ensureReady();
   const { token } = await params;
   const invoice = getInvoiceByToken(token);
   if (!invoice) return NextResponse.json({ error: 'Invoice not found.' }, { status: 404 });

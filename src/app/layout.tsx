@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import { Archivo, Inter } from 'next/font/google';
+import { ensureReady } from '@/lib/db';
 import './globals.css';
 
 const sans = Inter({
@@ -30,7 +31,11 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // On a serverless host the database has to be fetched before anything can read
+  // it, and this is the one component every page renders inside.
+  await ensureReady();
+
   return (
     <html lang="en" className={`${sans.variable} ${display.variable}`}>
       <body>{children}</body>

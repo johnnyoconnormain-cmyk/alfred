@@ -1,7 +1,7 @@
 'use server';
 
 import { redirect } from 'next/navigation';
-import { one } from '@/lib/db';
+import { mutate, one } from '@/lib/db';
 import type { User } from '@/lib/db/types';
 import { isValidEmail, normalizeEmail, validatePassword, verifyPassword } from '@/lib/auth';
 import { createSession, destroySession } from '@/lib/session';
@@ -41,15 +41,17 @@ export async function signUp(_prev: FormState, formData: FormData): Promise<Form
   if (passwordError) return { error: passwordError };
   if (emailTaken(email)) return { error: 'That email is already registered. Try signing in.' };
 
-  const { user } = provisionBusiness({
-    businessName,
-    ownerName,
-    email,
-    password,
-    phone: String(formData.get('phone') ?? '') || undefined,
-    city: String(formData.get('city') ?? '') || undefined,
-    state: String(formData.get('state') ?? '') || undefined,
-  });
+  const { user } = await mutate(() =>
+    provisionBusiness({
+      businessName,
+      ownerName,
+      email,
+      password,
+      phone: String(formData.get('phone') ?? '') || undefined,
+      city: String(formData.get('city') ?? '') || undefined,
+      state: String(formData.get('state') ?? '') || undefined,
+    }),
+  );
 
   await createSession(user.id);
   redirect('/dashboard');
@@ -57,7 +59,7 @@ export async function signUp(_prev: FormState, formData: FormData): Promise<Form
 
 /** One-click entry into the seeded demo tenant. Builds it on first use. */
 export async function enterDemo(): Promise<void> {
-  seedDemo();
+  await mutate(() => seedDemo());
   const user = one<User>('SELECT * FROM users WHERE lower(email) = ?', [normalizeEmail(DEMO_EMAIL)]);
   if (!user || !verifyPassword(DEMO_PASSWORD, user.password_hash)) {
     redirect('/login?error=demo');

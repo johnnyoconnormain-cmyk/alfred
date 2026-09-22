@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { one } from '@/lib/db';
 import type { Business } from '@/lib/db/types';
 import { getQuoteByToken, markQuoteViewed, quoteItems } from '@/lib/queries/quotes';
+import { mutate } from '@/lib/db';
 import { PublicShell } from '@/components/PublicShell';
 import { money } from '@/lib/money';
 import { formatDate } from '@/lib/dates';
@@ -34,8 +35,10 @@ export default async function PublicQuotePage({
   const business = one<Business>('SELECT * FROM businesses WHERE id = ?', [quote.business_id]);
   if (!business) notFound();
 
-  // Opening the link is the signal the office is waiting for.
-  markQuoteViewed(quote.id);
+  // Opening the link is the signal the office is waiting for — but only the
+  // first open changes anything, and on a snapshot-backed deployment a needless
+  // write would mean uploading the database on every page view.
+  if (quote.status === 'sent') await mutate(() => markQuoteViewed(quote.id));
   const items = quoteItems(quote.id);
   const settled = quote.status === 'accepted' || quote.status === 'declined';
 

@@ -2,7 +2,7 @@
   "name": "groundwork",
   "version": "0.1.0",
   "private": true,
-  "description": "Groundwork \u2014 the operating system for home-service businesses.",
+  "description": "Groundwork — the operating system for home-service businesses.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -10,9 +10,13 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "seed": "tsx --tsconfig tsconfig.scripts.json scripts/seed.ts",
-    "reset": "rm -rf .data public/uploads/demo && tsx --tsconfig tsconfig.scripts.json scripts/seed.ts"
+    "reset": "rm -rf .data public/uploads/demo && tsx --tsconfig tsconfig.scripts.json scripts/seed.ts",
+    "test:workflow": "node tests/workflow.e2e.mjs",
+    "test:access": "node tests/access.e2e.mjs",
+    "test:storage": "tsx --tsconfig tsconfig.scripts.json scripts/snapshot-test.ts"
   },
   "dependencies": {
+    "@vercel/blob": "^2.8.0",
     "better-sqlite3": "^11.10.0",
     "next": "^15.5.25",
     "react": "19.1.0",

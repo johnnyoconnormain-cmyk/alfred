@@ -12,3 +12,5 @@ next-env.d.ts
 .DS_Store
 npm-debug.log*
 tests/screenshots/
+tests/.restart-*
+.data-test/

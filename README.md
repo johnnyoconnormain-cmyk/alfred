@@ -17,11 +17,17 @@ That loop works end to end. Everything else in the product exists to support it.
 
 ## Running it
 
+**On your machine:**
+
 ```bash
 npm install
 npm run seed     # builds the demo company
 npm run dev      # http://localhost:3000
 ```
+
+**On Vercel:** import the repo and deploy. No environment variables, no database
+to sign up for. Add Vercel's own Blob storage afterwards to make it durable —
+see [Deploying](#deploying).
 
 Sign in with **mike@ridgelinelandscape.com** / **ridgeline2026**, or press
 *Open the demo company* on the login page.
@@ -57,6 +63,7 @@ Everything below is wired to the database. No mock screens.
 | **Invoicing** | Raised and sent automatically on completion; Stripe Checkout or manual entry |
 | **Reviews** | 4–5 stars routed to the public profile, 1–3 kept private. Nothing auto-posted |
 | **Analytics** | Revenue, conversion, service mix, lead sources, top customers |
+| **Storage** | SQLite on disk, or an ETag-guarded snapshot on serverless — picked automatically |
 | **Command centre** | Business pulse, pipeline, attention centre, crews, funnel, opportunities |
 
 ### What is deliberately not faked
@@ -118,6 +125,9 @@ src/
 ```
 
 **Data.** SQLite through `better-sqlite3`, with money stored as integer cents.
+Reads are synchronous; **writes go through `mutate()`**, the single boundary that
+knows whether the resulting bytes need pushing somewhere durable (see
+[Deploying](#deploying)).
 The schema (`src/lib/db/schema.ts`) is written in portable SQL and every
 tenant-owned table carries `business_id`, so moving to Postgres/Supabase is a
 swap of `src/lib/db` plus the query modules — the same filters become row-level
@@ -144,36 +154,119 @@ separation and contrast before any chart code was written.
 
 ## Testing
 
-Two Playwright suites drive the real UI against a running dev server:
+Three suites. The first two drive the real UI with Playwright against a running
+server; the third exercises the serverless storage path directly.
 
 ```bash
 npm run dev
 npm i --no-save playwright-core
-node tests/workflow.e2e.mjs   # the full lead → paid loop
-node tests/access.e2e.mjs     # roles, onboarding, tenant isolation
+
+npm run test:workflow   # the full lead → paid loop, through the UI
+npm run test:access     # roles, onboarding, tenant isolation
+npm run test:storage    # snapshot persistence and concurrent-write safety
 ```
 
-`workflow.e2e.mjs` submits the public intake form, signs in as the owner, builds
+`test:workflow` submits the public intake form, signs in as the owner, builds
 and sends a quote from the lead, accepts it as the customer, books a slot, starts
 and completes the job, checks the invoice was raised, records payment, leaves a
 review, and loads every page looking for errors.
 
-`access.e2e.mjs` checks that a crew member lands in the field app and cannot
-reach the office view, that signed-out visitors are redirected, that a
-brand-new business is provisioned with its rate card and automations, and that
-one tenant cannot see another's customers.
+`test:access` checks that a crew member lands in the field app and cannot reach
+the office view, that signed-out visitors are redirected, that a brand-new
+business is provisioned with its rate card and automations, and that one tenant
+cannot see another's customers.
+
+`test:storage` runs against a file-backed snapshot store that implements the same
+read-modify-write contract as Vercel Blob, so the serverless path is testable
+without deploying: it asserts that writes survive a cold start, that a racing
+write from another instance is detected and replayed rather than clobbered, and
+that a stale write is rejected.
+
+There is also a cold-start check that needs a real restart in the middle:
+
+```bash
+GROUNDWORK_PERSISTENCE=ephemeral node tests/restart.e2e.mjs before
+# restart the server
+GROUNDWORK_PERSISTENCE=ephemeral node tests/restart.e2e.mjs after
+```
+
+All of the above pass in `disk`, `blob` and `ephemeral` modes, and against a
+production build.
 
 ---
 
 ## Deploying
 
-The app builds and runs anywhere Next.js does. One caveat worth stating plainly:
-the default storage driver is SQLite on local disk, so on a serverless host
-(Vercel, Netlify functions) the database does not survive between deployments or
-instances. For a real deployment, either run it on a host with a persistent
-volume (Fly, Railway, a VPS, Docker), or port `src/lib/db` and the query modules
-to Postgres/Supabase — the schema is written for it and every tenant-owned table
-already carries `business_id` for row-level security.
+### Vercel, with nothing else to sign up for
+
+```
+Push the repo → Import it on Vercel → Deploy
+```
+
+That is the whole thing. The build needs no environment variables, and the
+deployment works immediately — but it is a **preview**: with no storage
+attached, the demo company is rebuilt in memory on every cold start and
+anything you do is lost. The app says so on every screen rather than letting you
+find out later.
+
+To make it a real system, add Vercel's own Blob storage — first-party, in the
+same dashboard, no third-party database account:
+
+```
+Vercel project → Storage → Create → Blob → Connect to this project → Redeploy
+```
+
+That injects `BLOB_READ_WRITE_TOKEN`, and on the next deploy Groundwork switches
+itself over: durable database, working photo uploads, and the preview banner
+disappears. Nothing to configure.
+
+### How storage actually works
+
+| Where it runs | Mode | What happens |
+|---|---|---|
+| Laptop, VPS, Docker, Fly, Railway | `disk` | SQLite file in `.data/`. Ordinary, fast, durable. |
+| Vercel **with** a Blob store | `blob` | The database is held in memory and its bytes are snapshotted to a **private** blob after every write. |
+| Vercel **without** a Blob store | `ephemeral` | In-memory demo, reset on each cold start. Clearly labelled everywhere. |
+
+`src/lib/deployment.ts` picks the mode; nothing else in the app branches on the
+hosting platform.
+
+**Why the snapshot approach is safe.** Two instances could try to save at the
+same moment, and the naive version of this loses somebody's invoice. Every write
+therefore goes through `mutate()` in `src/lib/db/index.ts`, which:
+
+1. serialises writes within the instance,
+2. saves **conditionally on the ETag it last read** (`ifMatch`), so a save that
+   would overwrite someone else's work is rejected rather than accepted, and
+3. on rejection, reloads their version and **replays the write on top** — which
+   is why `mutate()` takes the whole database operation as a closure, and why it
+   must contain no external side effects.
+
+`npm run test:storage` proves this: it stages a write from a second instance
+between our read and our write, then asserts that both survive.
+
+The snapshot is a few hundred KB, it is private (not reachable by URL), and a
+write costs one conditional upload. Housekeeping that would otherwise write on
+every page view — expiring quotes, draining due follow-ups, marking a quote
+viewed — is checked first and only writes when there is something to do.
+
+**Sessions** are rows in the database normally. In `ephemeral` mode there is no
+durable table to put them in, so the cookie is a signed token carrying the user
+id, and the demo seeds with deterministic ids — which is what keeps you signed
+in when the next request lands on a different instance.
+
+**Scheduled work.** `vercel.json` registers a daily cron against
+`/api/cron/automations` because that is what Vercel's Hobby plan allows; on Pro
+you can make it hourly. It is only a backstop either way — the queue also drains
+whenever somebody opens the app.
+
+### Anywhere else
+
+`npm run build && npm start` on any host with a writable disk. That is the
+`disk` mode above and needs no configuration at all. To move to Postgres later,
+`src/lib/db` and the query modules are the only things that change: the schema is
+written in portable SQL and every tenant-owned table already carries
+`business_id` for row-level security.
 
 ---
 

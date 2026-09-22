@@ -7,6 +7,8 @@ import { Card, Field, PageHeader } from '@/components/ui';
 import { CopyLink } from '@/components/CopyLink';
 import { DAY_NAMES } from '@/lib/dates';
 import { paymentProvider, isTestMode } from '@/lib/payments';
+import { storageStatus } from '@/lib/deployment';
+import { photoStorageStatus } from '@/lib/storage';
 import { aiProvider } from '@/lib/ai/provider';
 import { weatherProvider } from '@/lib/weather';
 import {
@@ -28,7 +30,24 @@ export default async function SettingsPage() {
   const team = teamMembers(business.id);
   const workDays: number[] = safeParse(settings.work_days, [1, 2, 3, 4, 5]);
 
+  const database = storageStatus();
+  const photos = photoStorageStatus();
+
   const integrations = [
+    {
+      name: 'Database storage',
+      on: database.durable,
+      detail: database.durable
+        ? `${database.label}. ${database.detail}`
+        : `${database.detail} ${database.remedy ?? ''}`,
+    },
+    {
+      name: 'Photo storage',
+      on: photos.available,
+      detail: photos.available
+        ? `Job and lead photos are stored in ${photos.label}.`
+        : photos.remedy ?? 'Photo uploads are turned off.',
+    },
     {
       name: 'Card payments (Stripe)',
       on: paymentProvider().enabled,

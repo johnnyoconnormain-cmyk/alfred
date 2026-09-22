@@ -3,11 +3,12 @@ import Link from 'next/link';
 import { requireSession } from '@/lib/session';
 import { Wordmark } from '@/components/Wordmark';
 import { CommandPalette } from '@/components/CommandPalette';
+import { StorageNotice } from '@/components/StorageNotice';
 import { MobileTabBar, NewMenu, SidebarNav, type NavItem } from '@/components/Nav';
 import { signOut } from '@/actions/auth';
 import { countOpenLeads } from '@/lib/queries/leads';
 import { one } from '@/lib/db';
-import { sweep } from '@/lib/automations/engine';
+import { runHousekeeping } from '@/lib/housekeeping';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,9 +17,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // Crew members get the field app, not the office one.
   if (user.role === 'crew') redirect('/crew');
 
-  // Drain any automation work that came due while nobody was looking. Cheap when
-  // the queue is empty, and it means follow-ups do not depend on a cron being up.
-  sweep(business);
+  // Drain any automation work that came due while nobody was looking, and expire
+  // stale quotes. Checked before it runs, so a quiet account costs two counts.
+  await runHousekeeping(business);
 
   const openLeads = countOpenLeads(business.id);
   const openQuotes =
@@ -87,7 +88,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </div>
         </header>
 
-        <main className="px-4 pb-24 pt-5 sm:px-6 sm:pt-6 lg:pb-10">{children}</main>
+        <main className="px-4 pb-24 pt-5 sm:px-6 sm:pt-6 lg:pb-10">
+          <StorageNotice />
+          {children}
+        </main>
       </div>
 
       <MobileTabBar items={items} />

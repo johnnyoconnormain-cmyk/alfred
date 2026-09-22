@@ -6,6 +6,7 @@ import { invoiceForJob } from '@/lib/queries/invoices';
 import { StatusBadge } from '@/components/ui';
 import { JobChecklist } from '@/components/JobChecklist';
 import { PhotoUpload } from '@/components/PhotoUpload';
+import { photoStorageStatus } from '@/lib/storage';
 import { BeforeAfter } from '@/components/PhotoGrid';
 import { formatDate, formatDuration, formatTime } from '@/lib/dates';
 import { money } from '@/lib/money';
@@ -94,7 +95,7 @@ export default async function CrewJobPage({ params }: { params: Promise<{ id: st
 
         <section className="card card-pad">
           <h2 className="h-section mb-3">Photos</h2>
-          <PhotoUpload jobId={job.id} />
+          <PhotoUpload jobId={job.id} storage={photoStorageStatus()} />
           {photos.length ? (
             <div className="mt-4">
               <BeforeAfter

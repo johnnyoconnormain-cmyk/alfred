@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { all } from '@/lib/db';
+import { all, ensureReady, mutate } from '@/lib/db';
 import type { Business } from '@/lib/db/types';
 import { sweep } from '@/lib/automations/engine';
 import { expireOverdueQuotes } from '@/lib/queries/quotes';
@@ -16,6 +16,8 @@ export const dynamic = 'force-dynamic';
  * `CRON_SECRET` if the deployment is publicly reachable.
  */
 export async function GET(req: NextRequest): Promise<NextResponse> {
+  await ensureReady();
+
   const secret = process.env.CRON_SECRET;
   if (secret) {
     const header = req.headers.get('authorization');
@@ -29,13 +31,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   let cancelled = 0;
   let expired = 0;
 
-  for (const business of businesses) {
-    const result = sweep(business);
-    ran += result.ran;
-    cancelled += result.cancelled;
-    expired += expireOverdueQuotes(business.id, business.timezone);
-  }
-  purgeExpiredSessions();
+  // One write for the whole sweep: on a snapshot-backed deployment each call to
+  // `mutate` costs an upload, so the work is batched rather than per-tenant.
+  await mutate(() => {
+    for (const business of businesses) {
+      const result = sweep(business);
+      ran += result.ran;
+      cancelled += result.cancelled;
+      expired += expireOverdueQuotes(business.id, business.timezone);
+    }
+    purgeExpiredSessions();
+  });
 
   return NextResponse.json({ businesses: businesses.length, ran, cancelled, expired });
 }

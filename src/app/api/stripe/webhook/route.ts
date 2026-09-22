@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { one } from '@/lib/db';
+import { ensureReady, mutate, one } from '@/lib/db';
 import type { Business } from '@/lib/db/types';
 import { getInvoice, recordPayment } from '@/lib/queries/invoices';
 import { emit } from '@/lib/automations/engine';
@@ -14,6 +14,8 @@ export const dynamic = 'force-dynamic';
  * duplicate `checkout.session.completed` must not double-credit the ledger.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  await ensureReady();
+
   const secret = process.env.STRIPE_SECRET_KEY;
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!secret || !webhookSecret) {
@@ -54,21 +56,23 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     ]);
     if (!invoice) return NextResponse.json({ received: true });
 
-    recordPayment({
-      businessId: invoice.business_id,
-      invoiceId,
-      amount,
-      method: 'card',
-      provider: 'stripe',
-      providerRef: session.id,
-      actor: 'stripe',
-    });
+    await mutate(() => {
+      recordPayment({
+        businessId: invoice.business_id,
+        invoiceId,
+        amount,
+        method: 'card',
+        provider: 'stripe',
+        providerRef: session.id,
+        actor: 'stripe',
+      });
 
-    const business = one<Business>('SELECT * FROM businesses WHERE id = ?', [invoice.business_id]);
-    const full = getInvoice(invoice.business_id, invoiceId);
-    if (business && full) {
-      emit('invoice.paid', { business, invoiceId, customerId: full.customer_id });
-    }
+      const business = one<Business>('SELECT * FROM businesses WHERE id = ?', [invoice.business_id]);
+      const full = getInvoice(invoice.business_id, invoiceId);
+      if (business && full) {
+        emit('invoice.paid', { business, invoiceId, customerId: full.customer_id });
+      }
+    });
   }
 
   return NextResponse.json({ received: true });

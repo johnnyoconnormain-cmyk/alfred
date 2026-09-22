@@ -3,7 +3,6 @@ import { requireOwner } from '@/lib/session';
 import { buildHud } from '@/lib/queries/dashboard';
 import { recentActivity } from '@/lib/queries/activity';
 import { listJobs } from '@/lib/queries/jobs';
-import { expireOverdueQuotes } from '@/lib/queries/quotes';
 import { addDays, formatDate, greeting } from '@/lib/dates';
 import { Card } from '@/components/ui';
 import { Pulse } from '@/components/hud/Pulse';
@@ -23,9 +22,6 @@ export const dynamic = 'force-dynamic';
 
 export default async function DashboardPage() {
   const { user, business, settings } = await requireOwner();
-
-  // Housekeeping that belongs to reading the board, not to a background worker.
-  expireOverdueQuotes(business.id, business.timezone);
 
   const hud = buildHud(business, settings);
   const activity = recentActivity(business.id, 18);

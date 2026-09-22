@@ -12,6 +12,7 @@ import { BeforeAfter, PhotoGrid } from '@/components/PhotoGrid';
 import { MessageThread } from '@/components/MessageThread';
 import { JobChecklist } from '@/components/JobChecklist';
 import { PhotoUpload } from '@/components/PhotoUpload';
+import { photoStorageStatus } from '@/lib/storage';
 import { CopyLink } from '@/components/CopyLink';
 import { formatDate, formatDuration, formatTime, relativeTime } from '@/lib/dates';
 import { money } from '@/lib/money';
@@ -141,7 +142,7 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
           <JobChecklist jobId={job.id} steps={steps} />
 
           <Card title="Job photos">
-            <PhotoUpload jobId={job.id} />
+            <PhotoUpload jobId={job.id} storage={photoStorageStatus()} />
             {photos.length ? (
               <div className="mt-4 space-y-4">
                 {photos.some((p) => p.kind === 'before') || photos.some((p) => p.kind === 'after') ? (

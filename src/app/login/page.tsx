@@ -5,6 +5,7 @@ import { Wordmark } from '@/components/Wordmark';
 import { enterDemo, signIn } from '@/actions/auth';
 import { getSession } from '@/lib/session';
 import { DEMO_EMAIL, DEMO_PASSWORD } from '@/lib/demo/seed';
+import { StorageNotice } from '@/components/StorageNotice';
 
 export const metadata = { title: 'Sign in' };
 export const dynamic = 'force-dynamic';
@@ -16,7 +17,10 @@ export default async function LoginPage() {
     <main className="flex min-h-screen flex-col justify-center bg-paper px-5 py-12">
       <div className="mx-auto w-full max-w-sm">
         <Wordmark size="lg" />
-        <h1 className="h-display mt-8">Sign in</h1>
+        <div className="mt-6">
+          <StorageNotice />
+        </div>
+        <h1 className="h-display mt-2">Sign in</h1>
         <p className="mt-1.5 text-sm text-ink-muted">
           Your leads, quotes, crew and payments in one place.
         </p>

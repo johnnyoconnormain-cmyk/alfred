@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
+import { mutate } from '@/lib/db';
 import { requireSession } from '@/lib/session';
 import {
   createInvoice,
@@ -21,14 +22,18 @@ export async function createInvoiceAction(formData: FormData): Promise<void> {
   const amount = parseMoney(String(formData.get('amount') ?? ''));
   if (!customerId || !amount) redirect('/payments/new?error=missing');
 
-  const invoice = createInvoice(business.id, {
-    customerId,
-    jobId: String(formData.get('jobId') ?? '') || null,
-    amount,
-    dueInDays: Number(formData.get('dueInDays')) || 14,
-    actor: user.name,
+  const send = formData.get('send') === 'yes';
+  const invoice = await mutate(() => {
+    const created = createInvoice(business.id, {
+      customerId,
+      jobId: String(formData.get('jobId') ?? '') || null,
+      amount,
+      dueInDays: Number(formData.get('dueInDays')) || 14,
+      actor: user.name,
+    });
+    if (send) sendInvoice(business.id, created.id, user.name);
+    return created;
   });
-  if (formData.get('send') === 'yes') sendInvoice(business.id, invoice.id, user.name);
 
   revalidatePath('/payments');
   redirect(`/payments/${invoice.id}`);
@@ -37,10 +42,10 @@ export async function createInvoiceAction(formData: FormData): Promise<void> {
 export async function sendInvoiceAction(formData: FormData): Promise<void> {
   const { business, user } = await requireSession();
   const invoiceId = String(formData.get('invoiceId') ?? '');
-  sendInvoice(business.id, invoiceId, user.name);
-
-  const invoice = getInvoice(business.id, invoiceId);
-  if (invoice) {
+  await mutate(() => {
+    sendInvoice(business.id, invoiceId, user.name);
+    const invoice = getInvoice(business.id, invoiceId);
+    if (!invoice) return;
     recordMessage({
       businessId: business.id,
       customerId: invoice.customer_id,
@@ -51,7 +56,7 @@ export async function sendInvoiceAction(formData: FormData): Promise<void> {
         business.name
       } for ${money(invoice.amount)} is ready: ${appUrl()}/pay/${invoice.token}`,
     });
-  }
+  });
   revalidatePath(`/payments/${invoiceId}`);
   revalidatePath('/payments');
   revalidatePath('/dashboard');
@@ -68,15 +73,17 @@ export async function recordPaymentAction(formData: FormData): Promise<void> {
     ? parseMoney(String(formData.get('amount')))
     : invoice.amount - invoice.amount_paid;
 
-  recordPayment({
-    businessId: business.id,
-    invoiceId,
-    amount,
-    method: (String(formData.get('method') ?? 'card') as Payment['method']),
-    provider: 'manual',
-    actor: user.name,
+  await mutate(() => {
+    recordPayment({
+      businessId: business.id,
+      invoiceId,
+      amount,
+      method: (String(formData.get('method') ?? 'card') as Payment['method']),
+      provider: 'manual',
+      actor: user.name,
+    });
+    emit('invoice.paid', { business, invoiceId, customerId: invoice.customer_id });
   });
-  emit('invoice.paid', { business, invoiceId, customerId: invoice.customer_id });
 
   revalidatePath(`/payments/${invoiceId}`);
   revalidatePath('/payments');
@@ -86,21 +93,24 @@ export async function recordPaymentAction(formData: FormData): Promise<void> {
 export async function sendPaymentRemindersAction(): Promise<void> {
   const { business } = await requireSession();
   const outstanding = listInvoices(business.id, { status: 'outstanding' });
+  if (!outstanding.length) return;
 
-  for (const invoice of outstanding) {
-    recordMessage({
-      businessId: business.id,
-      customerId: invoice.customer_id,
-      jobId: invoice.job_id,
-      channel: 'sms',
-      automated: true,
-      body: `Hi ${invoice.customer_name.split(' ')[0]}, a friendly reminder that invoice #${
-        invoice.number
-      } for ${money(invoice.amount - invoice.amount_paid)} is still open. You can pay here: ${appUrl()}/pay/${
-        invoice.token
-      }`,
-    });
-  }
+  await mutate(() => {
+    for (const invoice of outstanding) {
+      recordMessage({
+        businessId: business.id,
+        customerId: invoice.customer_id,
+        jobId: invoice.job_id,
+        channel: 'sms',
+        automated: true,
+        body: `Hi ${invoice.customer_name.split(' ')[0]}, a friendly reminder that invoice #${
+          invoice.number
+        } for ${money(invoice.amount - invoice.amount_paid)} is still open. You can pay here: ${appUrl()}/pay/${
+          invoice.token
+        }`,
+      });
+    }
+  });
   revalidatePath('/payments');
   revalidatePath('/dashboard');
 }

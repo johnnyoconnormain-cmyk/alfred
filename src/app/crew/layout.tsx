@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { requireSession } from '@/lib/session';
 import { signOut } from '@/actions/auth';
+import { StorageNoticeCompact } from '@/components/StorageNotice';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,7 +37,10 @@ export default async function CrewLayout({ children }: { children: React.ReactNo
         </div>
       </header>
 
-      <main className="mx-auto max-w-lg px-4 pb-16 pt-4">{children}</main>
+      <main className="mx-auto max-w-lg px-4 pb-16 pt-4">
+        <StorageNoticeCompact />
+        {children}
+      </main>
     </div>
   );
 }

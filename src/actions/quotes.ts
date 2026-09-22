@@ -18,7 +18,7 @@ import { estimate, estimateToQuoteLines } from '@/lib/ai/estimator';
 import { serviceLabel } from '@/lib/ai/classify';
 import { emit } from '@/lib/automations/engine';
 import { parseMoney } from '@/lib/money';
-import { run } from '@/lib/db';
+import { mutate, run } from '@/lib/db';
 import { isoNow } from '@/lib/dates';
 
 /** Reads the repeating line-item rows out of the quote builder form. */
@@ -57,23 +57,26 @@ export async function createQuoteAction(formData: FormData): Promise<void> {
     redirect(`/quotes/new?error=missing${leadId ? `&lead=${leadId}` : ''}`);
   }
 
-  const quote = createQuote({
-    businessId: business.id,
-    customerId,
-    leadId,
-    title,
-    serviceType,
-    items,
-    notes: String(formData.get('notes') ?? '') || null,
-    taxRate: settings.tax_rate,
-    validDays: settings.quote_valid_days,
-    actor: user.name,
+  const send = formData.get('send') === 'yes';
+  const quote = await mutate(() => {
+    const created = createQuote({
+      businessId: business.id,
+      customerId,
+      leadId,
+      title,
+      serviceType,
+      items,
+      notes: String(formData.get('notes') ?? '') || null,
+      taxRate: settings.tax_rate,
+      validDays: settings.quote_valid_days,
+      actor: user.name,
+    });
+    if (send) {
+      sendQuote(business.id, created.id, user.name);
+      emit('quote.sent', { business, quoteId: created.id, customerId });
+    }
+    return created;
   });
-
-  if (formData.get('send') === 'yes') {
-    sendQuote(business.id, quote.id, user.name);
-    emit('quote.sent', { business, quoteId: quote.id, customerId });
-  }
 
   revalidatePath('/quotes');
   revalidatePath('/dashboard');
@@ -87,23 +90,26 @@ export async function updateQuoteAction(formData: FormData): Promise<void> {
   if (!quote) return;
 
   const items = itemsFromForm(formData);
-  if (items.length) replaceQuoteItems(business.id, quoteId, items, settings.tax_rate);
-
-  run('UPDATE quotes SET title = ?, notes = ?, updated_at = ? WHERE business_id = ? AND id = ?', [
-    String(formData.get('title') ?? quote.title),
-    String(formData.get('notes') ?? '') || null,
-    isoNow(),
-    business.id,
-    quoteId,
-  ]);
+  await mutate(() => {
+    if (items.length) replaceQuoteItems(business.id, quoteId, items, settings.tax_rate);
+    run('UPDATE quotes SET title = ?, notes = ?, updated_at = ? WHERE business_id = ? AND id = ?', [
+      String(formData.get('title') ?? quote.title),
+      String(formData.get('notes') ?? '') || null,
+      isoNow(),
+      business.id,
+      quoteId,
+    ]);
+  });
   revalidatePath(`/quotes/${quoteId}`);
 }
 
 export async function sendQuoteAction(formData: FormData): Promise<void> {
   const { business, user } = await requireSession();
   const quoteId = String(formData.get('quoteId') ?? '');
-  const quote = sendQuote(business.id, quoteId, user.name);
-  if (quote) emit('quote.sent', { business, quoteId, customerId: quote.customer_id });
+  await mutate(() => {
+    const quote = sendQuote(business.id, quoteId, user.name);
+    if (quote) emit('quote.sent', { business, quoteId, customerId: quote.customer_id });
+  });
   revalidatePath(`/quotes/${quoteId}`);
   revalidatePath('/quotes');
   revalidatePath('/dashboard');
@@ -113,9 +119,19 @@ export async function sendQuoteAction(formData: FormData): Promise<void> {
 export async function acceptQuoteAction(formData: FormData): Promise<void> {
   const { business, user } = await requireSession();
   const quoteId = String(formData.get('quoteId') ?? '');
-  const result = acceptQuote(business.id, quoteId, { actor: user.name });
+  const result = await mutate(() => {
+    const accepted = acceptQuote(business.id, quoteId, { actor: user.name });
+    if (accepted) {
+      emit('quote.accepted', {
+        business,
+        quoteId,
+        jobId: accepted.jobId,
+        customerId: accepted.quote.customer_id,
+      });
+    }
+    return accepted;
+  });
   if (result) {
-    emit('quote.accepted', { business, quoteId, jobId: result.jobId, customerId: result.quote.customer_id });
     revalidatePath('/quotes');
     revalidatePath('/jobs');
     revalidatePath('/dashboard');
@@ -127,7 +143,7 @@ export async function acceptQuoteAction(formData: FormData): Promise<void> {
 export async function declineQuoteAction(formData: FormData): Promise<void> {
   const { business } = await requireSession();
   const quoteId = String(formData.get('quoteId') ?? '');
-  declineQuote(business.id, quoteId, String(formData.get('reason') ?? '') || undefined);
+  await mutate(() => declineQuote(business.id, quoteId, String(formData.get('reason') ?? '') || undefined));
   revalidatePath(`/quotes/${quoteId}`);
   revalidatePath('/quotes');
   revalidatePath('/dashboard');
@@ -185,17 +201,19 @@ export async function duplicateQuoteAction(formData: FormData): Promise<void> {
     unitPrice: item.unit_price,
   }));
 
-  const copy = createQuote({
-    businessId: business.id,
-    customerId: source.customer_id,
-    leadId: source.lead_id,
-    title: `${source.title} (copy)`,
-    serviceType: source.service_type,
-    items,
-    notes: source.notes,
-    taxRate: settings.tax_rate,
-    validDays: settings.quote_valid_days,
-    actor: user.name,
-  });
+  const copy = await mutate(() =>
+    createQuote({
+      businessId: business.id,
+      customerId: source.customer_id,
+      leadId: source.lead_id,
+      title: `${source.title} (copy)`,
+      serviceType: source.service_type,
+      items,
+      notes: source.notes,
+      taxRate: settings.tax_rate,
+      validDays: settings.quote_valid_days,
+      actor: user.name,
+    }),
+  );
   redirect(`/quotes/${copy.id}`);
 }

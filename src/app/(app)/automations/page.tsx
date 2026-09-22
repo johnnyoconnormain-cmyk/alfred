@@ -258,10 +258,11 @@ export default async function AutomationsPage() {
 
           <Card title="How this runs">
             <p className="text-sm leading-relaxed text-ink-muted">
-              Scheduled work is stored in the database, not in memory, and is drained every time the
-              app is used. It survives restarts and deploys. For minute-accurate timing on a quiet
-              account, point a cron at{' '}
-              <code className="rounded-sm bg-paper-sunken px-1 text-2xs">/api/cron/automations</code>.
+              Scheduled work is stored in the database, not in memory, and is drained every time
+              the app is used — so it survives restarts and deploys, and does not depend on a cron
+              being up. A scheduler pointed at{' '}
+              <code className="rounded-sm bg-paper-sunken px-1 text-2xs">/api/cron/automations</code>{' '}
+              is a backstop for days when nobody signs in.
             </p>
           </Card>
         </div>

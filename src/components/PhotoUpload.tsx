@@ -15,10 +15,26 @@ function Submit({ count }: { count: number }) {
 }
 
 /** Two buttons, both opening the camera. Anything more is a step too many in the field. */
-export function PhotoUpload({ jobId }: { jobId: string }) {
+export function PhotoUpload({
+  jobId,
+  storage,
+}: {
+  jobId: string;
+  storage: { available: boolean; remedy: string | null };
+}) {
   const [kind, setKind] = useState<'before' | 'after' | 'progress'>('before');
   const [count, setCount] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  if (!storage.available) {
+    return (
+      <p className="rounded border border-line bg-paper-sunken/60 px-3 py-2.5 text-xs text-ink-muted">
+        Photo storage is not connected on this deployment, so uploads are turned off. Everything
+        else about the job works.
+        {storage.remedy ? <span className="mt-1 block text-ink-faint">{storage.remedy}</span> : null}
+      </p>
+    );
+  }
 
   return (
     <form action={uploadJobPhotosAction}>
