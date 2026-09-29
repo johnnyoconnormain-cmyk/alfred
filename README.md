@@ -15,6 +15,26 @@ That loop works end to end. Everything else in the product exists to support it.
 
 ---
 
+## Deploy it to Vercel
+
+1. Go to **vercel.com/new** and import this repository.
+2. Press **Deploy**. Change nothing.
+
+No environment variables, no database to sign up for. Vercel detects Next.js on
+its own. When it finishes, open the URL and press *Open the demo company*.
+
+That first deploy is a **preview**: with no storage attached, the demo is rebuilt
+in memory on every cold start and changes are lost. The app says so in a banner
+so you are never guessing. To make it real:
+
+3. In the Vercel project: **Storage → Create → Blob → Connect**, then redeploy.
+
+That is Vercel's own storage, in the same dashboard, with no third-party
+account. It gives you a durable database and working photo uploads, and the
+banner disappears. Details in [Deploying](#deploying).
+
+---
+
 ## Running it
 
 **On your machine:**
